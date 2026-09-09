@@ -1,0 +1,16 @@
+[package]
+name = "mackenzie"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bitflags = "2.11.0"
+libc = "0.2.180"
+toml = "1.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+wayland-backend = "0.3.14"
+wayland-client = "0.31.13"
+wayland-scanner = "0.31.9"
+#wayland-protocols = { version = "0.32", features = ["staging", "client"] }
+xkbcommon = { version = "0.9", features = ["wayland"] }
