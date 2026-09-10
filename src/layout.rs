@@ -22,7 +22,7 @@ pub struct Geometry {
 
 #[derive(Debug, Clone)]
 pub struct Column {
-    pub id: i32,
+    pub id: i16,
     pub output_id: ObjectId,
     pub windows_id: Vec<ObjectId>,
 
@@ -30,7 +30,7 @@ pub struct Column {
     pub width: i32,
     pub prev_width: i32,
 
-    pub tags: u16,
+    pub tag: u16,
     pub is_maximized: bool,
     pub redistribute_requested: bool,
 }
@@ -38,7 +38,7 @@ pub struct Column {
 //--- Functions -----
 pub fn create_new_column (
     columns: &mut Vec<Column>,
-    new_column_id: i32,
+    new_column_id: i16,
     new_column_index: usize,
     window: &mut Window,
     output: &Output,
@@ -51,13 +51,13 @@ pub fn create_new_column (
         prev_width: window.geom.w,
         output_id: output.proxy.id().clone(),
         windows_id: Vec::new(),
-        tags: focused_tag,
+        tag: focused_tag,
         is_maximized: false,
         redistribute_requested: false,
     };
 
     window.column_id = new_column_id;
-    window.output_id = output.proxy.id().clone();
+    //window.output_id = output.proxy.id().clone();
 
     column.windows_id.push(window.proxy.id().clone());
 
@@ -88,6 +88,18 @@ fn render_focused_column(
 
     for window_id in &column.windows_id { 
         let window = windows.get_mut(&window_id).unwrap();
+
+        if window.is_floating { 
+            let mut this_border_color = &config.window.border_color_unfocused;
+            if window.proxy.id()==focused_window.proxy.id() {
+                this_border_color = &config.window.border_color_focused;
+            }
+            let bcol = crate::wmcore::parse_hex_color(this_border_color.as_str());
+            window.proxy.set_borders(Edges::all(), bw, bcol.0, bcol.1, bcol.2, bcol.3);
+
+            window.node.place_top();
+            continue; 
+        }
 
         window.at_scroll_edge = false;
 
@@ -141,6 +153,15 @@ fn render_unfocused_column(
 
     for window_id in &column.windows_id {
         let window = windows.get_mut(&window_id).unwrap();
+
+        if window.is_floating { 
+            let this_border_color = &config.window.border_color_unfocused;
+            let bcol = crate::wmcore::parse_hex_color(this_border_color.as_str());
+            window.proxy.set_borders(Edges::all(), bw, bcol.0, bcol.1, bcol.2, bcol.3 );
+        
+            window.node.place_top();
+            continue; 
+        }
 
         window.at_scroll_edge = false;
 
@@ -206,14 +227,14 @@ pub fn arrange(
         println!(" |--> output = {}", output_id);
 
         // Hide windows not in the visible tags
-        for column in state.columns.iter().filter(|c| &c.output_id == output_id && c.tags & output.visible_tags == 0) {
+        for column in state.columns.iter().filter(|c| &c.output_id == output_id && c.tag & output.visible_tags == 0) {
             for window in state.windows.values().filter(|w| w.column_id==column.id) {
                 window.proxy.hide();
             }
         }
 
         let mut visible_columns: Vec<&mut Column> = state.columns.iter_mut()
-            .filter(|c| &c.output_id == output_id && c.tags & output.visible_tags > 0)
+            .filter(|c| &c.output_id == output_id && c.tag & output.visible_tags > 0)
             .collect();
         let ncols = visible_columns.len();
         if ncols==0 { continue; }

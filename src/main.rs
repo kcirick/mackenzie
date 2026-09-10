@@ -17,7 +17,6 @@ use crate::ipc::ipc_action;
 use wayland_client::Connection;
 
 use std::fs;
-//use std::io::Read;
 use std::os::unix::net::{UnixListener};
 use std::os::unix::io::{AsFd,AsRawFd};
 

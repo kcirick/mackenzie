@@ -1,6 +1,5 @@
 use crate::protocol::river_wm::river_window_manager_v1::RiverWindowManagerV1;
 use crate::protocol::river_wm::river_window_v1::Edges;
-//use wayland_backend::client::ObjectId;
 use wayland_client::Proxy;
 
 //use std::collections::HashMap;
@@ -21,7 +20,9 @@ pub enum Action {
     Spawn(String, Vec<String>),
     FocusTag(String),
     MoveToTag(String),
+    ToggleTag(String),
     ToggleMaximizeColumn,
+    ToggleFloat,
     ConsumeEject(String),
     Close,
     Focus(String),
@@ -47,8 +48,10 @@ impl Action {
         match name.to_lowercase().as_str() {
             "spawn" =>                      Action::Spawn(main, rest),
             "focus_tag" =>                  Action::FocusTag(main),
+            "toggle_tag" =>                 Action::ToggleTag(main),
             "move_to_tag" =>                Action::MoveToTag(main),
             "toggle_maximize_column" =>     Action::ToggleMaximizeColumn,
+            "toggle_float" =>               Action::ToggleFloat,
             "consume_or_eject" =>           Action::ConsumeEject(main),
             "quit" =>                       Action::Exit,
             "focus" =>                      Action::Focus(main),
@@ -114,6 +117,21 @@ impl Action {
                 state.needs_arrange = true;
             }
 
+            Action::ToggleFloat => {
+                let focused_window = state.windows.get_mut(&state.focused_window_id).unwrap();
+                let focused_column = state.columns.iter_mut().find(|c| c.id == focused_window.column_id).unwrap();
+
+                println!("toggle_float");
+                focused_window.is_floating = ! focused_window.is_floating;
+                if focused_window.is_floating {
+                    focused_column.width = 0;
+                } else {
+                    focused_column.width = focused_window.geom.w;
+                    focused_column.redistribute_requested = true;
+                }
+                state.needs_arrange = true;
+            }
+
             Action::FocusTag(tag_str) => {
                 let tag: i16 = tag_str.parse().expect("Not a valid number");
                 let focused_output = state.outputs.get_mut(&state.focused_output_id).unwrap();
@@ -126,13 +144,28 @@ impl Action {
                 state.needs_arrange = true;
             }
             
+            Action::ToggleTag(tag_str) => {
+                let tag: i16 = tag_str.parse().expect("Not a valid number");
+                let focused_output = state.outputs.get_mut(&state.focused_output_id).unwrap();
+
+                println!("Toggle tag {tag}");
+                if (1<<tag-1) & focused_output.visible_tags > 0 { 
+                    focused_output.visible_tags ^= 1<<(tag-1);
+                } else {
+                    focused_output.visible_tags |= 1<<(tag-1);
+                }
+
+                println!("needs_arrange from toggle_tag action");
+                state.needs_arrange= true;
+            }
+
             Action::MoveToTag(tag_str) => {
                 let tag: i16 = tag_str.parse().expect("Not a valid number");
                 let focused_window = state.windows.get(&state.focused_window_id).unwrap();
                 let focused_column = state.columns.iter_mut().find(|c| c.id == focused_window.column_id).unwrap();
 
                 println!("Moving to tag {tag}");
-                focused_column.tags = 1<<(tag-1);
+                focused_column.tag = 1<<(tag-1);
                 seat.hovered = None;
 
                 println!("needs_arrange from move_to_tag action"); 
@@ -146,7 +179,9 @@ impl Action {
                     if let (Some(window_proxy), SeatOp::None) = (seat.hovered.as_ref(), &seat.op) {
                         let window = state.windows.get(&window_proxy.id())
                             .expect("Hovered window not found");
-                        seat.pointer_move(window);
+                        if window.is_floating {
+                            seat.pointer_move(window);
+                        }
                     }
                 }
             }
@@ -160,9 +195,9 @@ impl Action {
                     .map(|(_, w)| w.column_id).unwrap();
                 let columns_length = state.columns.len().clone();
 
-                let focused_output = state.outputs.get(&state.focused_output_id).unwrap(); 
-                let focused_window = state.windows.get(&state.focused_window_id).unwrap();
-                let focused_column_id = focused_window.column_id.clone();
+                let focused_output = state.outputs.get_mut(&state.focused_output_id).unwrap(); 
+                //let focused_window = state.windows.get(&state.focused_window_id).unwrap();
+                let focused_column_id = focused_output.focused_column_id.clone();
                 let (focused_column_index, focused_column) = state.columns.iter_mut().enumerate()
                     .find(|(_, c)| c.id == focused_column_id).unwrap();
 
@@ -176,10 +211,11 @@ impl Action {
                             .find(|(i, c)| 
                                 i<&focused_column_index && 
                                 c.output_id == state.focused_output_id && 
-                                c.tags & focused_output.visible_tags > 0) 
+                                c.tag & focused_output.visible_tags > 0) 
                         { 
                             //println!("next column: {ind} - {:?}", next_column);
                             focused_window.column_id=next_column.id.clone();
+                            focused_output.focused_column_id=next_column.id.clone();
                             next_column.windows_id.push(focused_window.proxy.id().clone());
 
                             let n_wins_2 = next_column.windows_id.len() as i32;
@@ -221,9 +257,10 @@ impl Action {
                             .find(|(i, c)| 
                                 i>&focused_column_index && 
                                 c.output_id == state.focused_output_id && 
-                                c.tags & focused_output.visible_tags > 0) 
+                                c.tag & focused_output.visible_tags > 0) 
                         { 
                             focused_window.column_id=next_column.id.clone();
+                            focused_output.focused_column_id=next_column.id.clone();
                             next_column.windows_id.push(focused_window.proxy.id().clone());
 
                             let n_wins_2 = next_column.windows_id.len() as i32;
@@ -270,8 +307,9 @@ impl Action {
                 let columns_length = state.columns.len().clone();
 
                 let focused_output = state.outputs.get_mut(&state.focused_output_id).unwrap(); 
-                let focused_window = state.windows.get(&state.focused_window_id).unwrap();
-                let focused_column_id = focused_window.column_id.clone();
+                //let focused_window = state.windows.get(&state.focused_window_id).unwrap();
+                //let focused_column_id = focused_window.column_id.clone();
+                let focused_column_id = focused_output.focused_column_id.clone();
                 let (focused_column_index, focused_column) = state.columns.iter_mut().enumerate()
                     .find(|(_, c)| c.id == focused_column_id).unwrap();
 
@@ -280,7 +318,7 @@ impl Action {
                         .find(|(i, c)| 
                             i<&focused_column_index && 
                             c.output_id == state.focused_output_id && 
-                            c.tags & focused_output.visible_tags > 0) 
+                            c.tag & focused_output.visible_tags > 0) 
                     { 
                         //println!("next column: {ind} - {:?}", next_column);
                         let (objid, next_window) = state.windows.iter()
@@ -295,7 +333,7 @@ impl Action {
                         .find(|(i, c)| 
                             i>&focused_column_index && 
                             c.output_id == state.focused_output_id && 
-                            c.tags & focused_output.visible_tags > 0) 
+                            c.tag & focused_output.visible_tags > 0) 
                     {
                         let (objid, next_window) = state.windows.iter()
                             .find(|(_,w)| w.column_id==next_column.id).unwrap();
@@ -310,6 +348,7 @@ impl Action {
                     if focused_window_pos>0 {
                         let next_window = state.windows.get(&focused_column.windows_id[focused_window_pos-1]).unwrap();
                         state.focused_window_id = next_window.proxy.id().clone();
+                        focused_output.focused_column_id = next_window.column_id;
                         seat.proxy.focus_window(&next_window.proxy);
                     }
                 }
@@ -319,6 +358,7 @@ impl Action {
                     if focused_window_pos<(focused_column.windows_id.len()-1) {
                         let next_window = state.windows.get(&focused_column.windows_id[focused_window_pos+1]).unwrap();
                         state.focused_window_id = next_window.proxy.id().clone();
+                        focused_output.focused_column_id = next_window.column_id;
                         seat.proxy.focus_window(&next_window.proxy);
                     }
                 }
@@ -415,7 +455,9 @@ impl Action {
                     if let (Some(window_proxy), SeatOp::None) = (seat.hovered.as_ref(), &seat.op) {
                         let window = state.windows.get(&window_proxy.id())
                             .expect("Hovered window not found");
-                        seat.pointer_resize(window, Edges::Bottom.union(Edges::Right));
+                        if window.is_floating {
+                            seat.pointer_resize(window, Edges::Bottom.union(Edges::Right));
+                        }
                     }
                 }
             }

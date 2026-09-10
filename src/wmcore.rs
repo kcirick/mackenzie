@@ -94,6 +94,8 @@ pub struct WMState {
     pub focused_tag: u16,
 
     pub needs_arrange: bool,
+
+    // IPC stuff
     pub ipc_update_requested: bool,
     pub ipc_listener: Option<UnixListener>, 
     pub ipc_clients: Vec<UnixStream>,
@@ -103,16 +105,18 @@ pub struct WMState {
 pub struct Window {
     pub proxy: RiverWindowV1,
     pub node: RiverNodeV1,
-    pub output_id: ObjectId,
-    pub column_id: i32,
+    pub column_id: i16,
 
     new: bool,
     closed: bool,
     
     pub geom: Geometry,
-    //pub float_geom: Geometry,
+    pub float_geom: Geometry,
+
     pub resize_requested: bool,
     pub at_scroll_edge: bool,
+    pub is_floating: bool,
+
     pointer_move_requested: Option<RiverSeatV1>,
     pointer_resize_requested: Option<RiverSeatV1>,
     pointer_resize_requested_edges: Edges,
@@ -138,20 +142,21 @@ impl WMState {
             river_wm: None,
             river_xkb: None,
             layer_shell_manager: None,
-            seat: None,
-            wl_output_info: Vec::new(),
 
             config: Config::default(), 
-
-            windows: HashMap::new(),
+            
+            seat: None,
+            wl_output_info: Vec::new(),
             outputs: HashMap::new(),
             columns: Vec::new(),
+            windows: HashMap::new(),
 
             focused_output_id: ObjectId::null(),
             focused_window_id: ObjectId::null(),
             focused_tag: (1 << 0),
 
             needs_arrange: false,
+
             ipc_update_requested: false,
             ipc_listener: None, 
             ipc_clients: Vec::new(),
@@ -165,14 +170,8 @@ impl WMState {
     ){
         println!("\n[ handle_manage_start ]");
 
-        //for (idx, column) in self.columns.iter().enumerate() {
-        //    println!(" |-> column index: {} - id: {:?}", idx, column.id);
-        //}
-
         let seat = self.seat.as_mut().unwrap();
         if seat.pending_action != Action::None {
-            //println!("needs_arrange from pending action");
-            //self.needs_arrange = true;
             self.ipc_update_requested = true;
         }
         Action::do_action(self, &proxy);
@@ -365,7 +364,7 @@ impl WMState {
             }
         }
 
-        for column in self.columns.iter().filter(|c| c.redistribute_requested) {
+        for column in self.columns.iter_mut().filter(|c| c.redistribute_requested) {
             let focused_output = self.outputs.get(&self.focused_output_id).unwrap(); 
             let output_area = focused_output.usable_area;
             let gap = self.config.layout.gap + self.config.window.border_width;
@@ -382,6 +381,7 @@ impl WMState {
                     window.resize_requested = true;
                 }
             }
+            column.redistribute_requested = false;
         }
 
         let seat = self.seat.as_mut().unwrap();
@@ -389,18 +389,16 @@ impl WMState {
             // Sloppy focus on hovered windows (unless they are at the edge or sloppy focus is
             // disabled)
             if let Some(hovered_window_proxy) = seat.hovered.as_ref() {
-                if &window.proxy==hovered_window_proxy {
-                    if !window.at_scroll_edge { 
-                        println!(" |--> focusing on a hovered window"); 
-                        if hovered_window_proxy.id() != self.focused_window_id {
-                            println!("needs_arrange from sloppy focus");
-                            self.needs_arrange = true;
-                        }
-                        seat.proxy.focus_window(&window.proxy);
-                        self.focused_window_id = window.proxy.id();
-                        let output = self.outputs.get_mut(&self.focused_output_id).unwrap();
-                        output.focused_column_id = window.column_id;
+                if &window.proxy==hovered_window_proxy && !window.at_scroll_edge { 
+                    println!(" |--> focusing on a hovered window"); 
+                    if hovered_window_proxy.id() != self.focused_window_id {
+                        println!("needs_arrange from sloppy focus");
+                        self.needs_arrange = true;
                     }
+                    seat.proxy.focus_window(&window.proxy);
+                    self.focused_window_id = window.proxy.id();
+                    let output = self.outputs.get_mut(&self.focused_output_id).unwrap();
+                    output.focused_column_id = window.column_id;
                 }
             }
             // Click to raise
@@ -459,7 +457,6 @@ impl WMState {
                 return;
             }
 
-            //let mut initial_feed = stream;
             let initial_response = self.get_tags_status_json();
             let _ = stream.write_all(initial_response.as_bytes());
 
@@ -470,7 +467,6 @@ impl WMState {
     pub fn ipc_broadcast (
         &mut self,
     ) {
-        
         if self.ipc_clients.is_empty() { return; }
 
         let json_workspace = self.get_tags_status_json(); 
@@ -489,7 +485,7 @@ impl WMState {
             };
             for i in 1..(n_tags+1) {
                 let n_columns = self.columns.iter()
-                    .filter(|c| c.output_id==output.proxy.id() && c.tags & (1 << (i-1)) >0)
+                    .filter(|c| c.output_id==output.proxy.id() && c.tag & (1 << (i-1)) >0)
                     .count();
                 let tag_info = TagInfo {
                     index: i,
@@ -514,17 +510,21 @@ impl Window {
         Window {
             proxy,
             node,
-            output_id: ObjectId::null(),
             column_id: 0,
+
             new: true,
             closed: false,
+            
             geom: Geometry { x:0, y:0, w:0, h:0 },
-            //float_geom: Geometry { x:0, y:0, w:0, h:0 },
+            float_geom: Geometry { x:0, y:0, w:0, h:0 },
+
+            resize_requested: false,
+            at_scroll_edge: false,
+            is_floating: false,
+
             pointer_move_requested: None,
             pointer_resize_requested: None,
             pointer_resize_requested_edges: Edges::None,
-            resize_requested: false,
-            at_scroll_edge: false,
         }
     }
 

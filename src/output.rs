@@ -17,8 +17,7 @@ pub struct Output {
     pub usable_area: Geometry,
     
     pub visible_tags: u16,
-    //pub visible_columns_id: Vec<i32>,
-    pub focused_column_id: i32,
+    pub focused_column_id: i16,
 
     pub ls_output: Option<RiverLayerShellOutputV1>,
 }
@@ -41,7 +40,6 @@ impl Output {
             usable_area: Geometry { x:0, y:0, w:0, h:0 },
 
             visible_tags: current_tag,
-            //visible_columns_id: Vec::new(),
             focused_column_id: 0,
 
             ls_output:None,

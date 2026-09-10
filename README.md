@@ -1,4 +1,4 @@
-<h1 align="center">mackenzie</h1>
+<h1 align="center"> &#x1f3de mackenzie</h1>
 
 A simple window manager/compositor for [River](https://codeberg.org/river/river). It is written to fit my specific needs, and a way to teach myself how to code in rust. 
 
@@ -10,10 +10,12 @@ A simple window manager/compositor for [River](https://codeberg.org/river/river)
   - Written in [rust]
   - Built upon [tinyrwm]
   - Features:
-    - No frills (menu, titlebar, icons, animation, pixmap themes, etc...)
+    - No frills (menu, titlebar, icons, animation*, pixmap themes, etc...)
     - Configration file uses [toml] format
     - Basic IPC call for use with [quickshell]
     - Easy to read code structure so others can easily understand, reference and learn from
+
+\* may be added later
 
 [niri]: https://niri-wm.github.io/niri/index.html
 [rust]: https://rust-lang.org
