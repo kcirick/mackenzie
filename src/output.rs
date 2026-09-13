@@ -17,7 +17,6 @@ pub struct Output {
     pub usable_area: Geometry,
     
     pub visible_tags: u16,
-    pub focused_column_id: i16,
 
     pub ls_output: Option<RiverLayerShellOutputV1>,
 }
@@ -40,7 +39,6 @@ impl Output {
             usable_area: Geometry { x:0, y:0, w:0, h:0 },
 
             visible_tags: current_tag,
-            focused_column_id: 0,
 
             ls_output:None,
         }
@@ -63,7 +61,7 @@ impl Dispatch<RiverOutputV1, ()> for WMState {
             Event::Removed => output.removed = true,
             Event::WlOutput { name: id } => { 
                 if let Some(wloutput) = state.wl_output_info.iter().find(|o| o.id == id) {
-                    //println!("Match Wloutput with name {}", wloutput.name);
+                    println!("Match Wloutput with name {}", wloutput.name);
                     output.name = wloutput.name.clone();
                 }
             }

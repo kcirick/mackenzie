@@ -262,6 +262,10 @@ impl Dispatch<RiverSeatV1, ()> for WMState {
                         if &state.focused_output_id != oid {
                             println!("focused output = {}", oid);
                             state.focused_output_id = oid.clone();
+                            if let Some(ls_output) = &output.ls_output {
+                                println!("setting ls_output");
+                                ls_output.set_default();
+                            }
                         }
                     }
                 }

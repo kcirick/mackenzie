@@ -91,6 +91,7 @@ impl Action {
             }
             
             Action::ToggleMaximizeColumn => {
+                let focused_output = state.outputs.get(&state.focused_output_id).unwrap(); 
                 let focused_window = state.windows.get(&state.focused_window_id).unwrap();
                 let focused_column = state.columns.iter_mut().find(|c| c.id == focused_window.column_id).unwrap();
 
@@ -98,14 +99,12 @@ impl Action {
                 if focused_column.is_maximized {
                     focused_column.width = focused_column.prev_width;
                 } else {
-                    let focused_output = state.outputs.get(&state.focused_output_id).unwrap(); 
                     let output_area = focused_output.usable_area;
                     let gap = state.config.layout.gap + state.config.window.border_width;
                     let edge_gap = state.config.layout.scroll_edge_gap;
 
                     focused_column.prev_width = focused_column.width;
                     focused_column.width = output_area.w - 2*edge_gap - 2* gap;
-
                 }
                 println!("column width = {} / prev = {}", focused_column.width, focused_column.prev_width);
                 focused_column.is_maximized = ! focused_column.is_maximized;
@@ -118,13 +117,35 @@ impl Action {
             }
 
             Action::ToggleFloat => {
+                let max_column_id = state.windows.iter()
+                    .max_by_key(|(_, w)| w.column_id)
+                    .map(|(_, w)| w.column_id).unwrap();
+                let focused_output = state.outputs.get_mut(&state.focused_output_id).unwrap(); 
                 let focused_window = state.windows.get_mut(&state.focused_window_id).unwrap();
-                let focused_column = state.columns.iter_mut().find(|c| c.id == focused_window.column_id).unwrap();
+                let (focused_column_index, focused_column) = state.columns.iter_mut().enumerate()
+                    .find(|(_, c)| c.id == focused_window.column_id).unwrap();
+                let n_wins = focused_column.windows_id.len() as i32;
 
                 println!("toggle_float");
                 focused_window.is_floating = ! focused_window.is_floating;
+
                 if focused_window.is_floating {
-                    focused_column.width = 0;
+                    if n_wins==1 {
+                        focused_column.width = 0;
+                    } else {
+                        // eject into a new column if there are more than one window in a column
+                        focused_column.windows_id.retain(|wid| wid != &focused_window.proxy.id());
+                        focused_column.redistribute_requested = true;
+                        let mut new_column = create_new_column(
+                            max_column_id+1,
+                            focused_column_index,
+                            focused_window,
+                            focused_output,
+                            state.focused_tag,
+                        );
+                        new_column.width = 0;
+                        state.columns.insert(focused_column_index, new_column);
+                    }
                 } else {
                     focused_column.width = focused_window.geom.w;
                     focused_column.redistribute_requested = true;
@@ -196,8 +217,8 @@ impl Action {
                 let columns_length = state.columns.len().clone();
 
                 let focused_output = state.outputs.get_mut(&state.focused_output_id).unwrap(); 
-                //let focused_window = state.windows.get(&state.focused_window_id).unwrap();
-                let focused_column_id = focused_output.focused_column_id.clone();
+                let focused_window = state.windows.get(&state.focused_window_id).unwrap();
+                let focused_column_id = focused_window.column_id.clone();
                 let (focused_column_index, focused_column) = state.columns.iter_mut().enumerate()
                     .find(|(_, c)| c.id == focused_column_id).unwrap();
 
@@ -215,7 +236,6 @@ impl Action {
                         { 
                             //println!("next column: {ind} - {:?}", next_column);
                             focused_window.column_id=next_column.id.clone();
-                            focused_output.focused_column_id=next_column.id.clone();
                             next_column.windows_id.push(focused_window.proxy.id().clone());
 
                             let n_wins_2 = next_column.windows_id.len() as i32;
@@ -229,14 +249,16 @@ impl Action {
                     }
                     // eject to a new column
                     else {
-                        create_new_column(
-                            &mut state.columns,
+                        let new_column = create_new_column(
+                            //&mut state.columns,
                             max_column_id+1,
                             focused_column_index,
                             focused_window,
                             focused_output,
                             state.focused_tag,
                         );
+                        state.columns.insert(focused_column_index, new_column);
+
                         let prev_column = state.columns.iter_mut().find(|c| c.id == focused_column_id).unwrap();
                         prev_column.windows_id.retain(|wid| wid != &state.focused_window_id);
                         focused_window.geom.h = focused_output.usable_area.h - 2*gap;
@@ -260,7 +282,6 @@ impl Action {
                                 c.tag & focused_output.visible_tags > 0) 
                         { 
                             focused_window.column_id=next_column.id.clone();
-                            focused_output.focused_column_id=next_column.id.clone();
                             next_column.windows_id.push(focused_window.proxy.id().clone());
 
                             let n_wins_2 = next_column.windows_id.len() as i32;
@@ -273,14 +294,16 @@ impl Action {
                         }
                     }
                     else {
-                        create_new_column(
-                            &mut state.columns,
+                        let new_column = create_new_column(
+                            //&mut state.columns,
                             max_column_id+1,
                             focused_column_index+1,
                             focused_window,
                             focused_output,
                             state.focused_tag,
                         );
+                        state.columns.insert(focused_column_index, new_column);
+
                         let prev_column = state.columns.iter_mut().find(|c| c.id == focused_column_id).unwrap();
                         prev_column.windows_id.retain(|wid| wid != &state.focused_window_id);
 
@@ -307,9 +330,8 @@ impl Action {
                 let columns_length = state.columns.len().clone();
 
                 let focused_output = state.outputs.get_mut(&state.focused_output_id).unwrap(); 
-                //let focused_window = state.windows.get(&state.focused_window_id).unwrap();
-                //let focused_column_id = focused_window.column_id.clone();
-                let focused_column_id = focused_output.focused_column_id.clone();
+                let focused_window = state.windows.get(&state.focused_window_id).unwrap();
+                let focused_column_id = focused_window.column_id.clone();
                 let (focused_column_index, focused_column) = state.columns.iter_mut().enumerate()
                     .find(|(_, c)| c.id == focused_column_id).unwrap();
 
@@ -318,14 +340,15 @@ impl Action {
                         .find(|(i, c)| 
                             i<&focused_column_index && 
                             c.output_id == state.focused_output_id && 
-                            c.tag & focused_output.visible_tags > 0) 
+                            c.tag & focused_output.visible_tags > 0 &&
+                            c.width > 0) 
                     { 
                         //println!("next column: {ind} - {:?}", next_column);
                         let (objid, next_window) = state.windows.iter()
                             .find(|(_,w)| w.column_id==next_column.id).unwrap();
                         state.focused_window_id = objid.clone();
-                        focused_output.focused_column_id = next_window.column_id;
                         seat.proxy.focus_window(&next_window.proxy);
+                        seat.hovered = Some(next_window.proxy.clone());
                     }
                 }
                 else if direction.as_str() == "right" && focused_column_index<(columns_length-1) {
@@ -333,13 +356,14 @@ impl Action {
                         .find(|(i, c)| 
                             i>&focused_column_index && 
                             c.output_id == state.focused_output_id && 
-                            c.tag & focused_output.visible_tags > 0) 
+                            c.tag & focused_output.visible_tags > 0 &&
+                            c.width > 0) 
                     {
                         let (objid, next_window) = state.windows.iter()
                             .find(|(_,w)| w.column_id==next_column.id).unwrap();
                         state.focused_window_id = objid.clone();
-                        focused_output.focused_column_id = next_window.column_id;
                         seat.proxy.focus_window(&next_window.proxy);
+                        seat.hovered = Some(next_window.proxy.clone());
                     }
                 }
                 else if direction.as_str() == "up" {
@@ -348,8 +372,8 @@ impl Action {
                     if focused_window_pos>0 {
                         let next_window = state.windows.get(&focused_column.windows_id[focused_window_pos-1]).unwrap();
                         state.focused_window_id = next_window.proxy.id().clone();
-                        focused_output.focused_column_id = next_window.column_id;
                         seat.proxy.focus_window(&next_window.proxy);
+                        seat.hovered = Some(next_window.proxy.clone());
                     }
                 }
                 else if direction.as_str() == "down" {
@@ -358,12 +382,11 @@ impl Action {
                     if focused_window_pos<(focused_column.windows_id.len()-1) {
                         let next_window = state.windows.get(&focused_column.windows_id[focused_window_pos+1]).unwrap();
                         state.focused_window_id = next_window.proxy.id().clone();
-                        focused_output.focused_column_id = next_window.column_id;
                         seat.proxy.focus_window(&next_window.proxy);
+                        seat.hovered = Some(next_window.proxy.clone());
                     }
                 }
                 seat.ignore_pointer_enter_event = true;
-                seat.hovered = None;
 
                 println!("needs_arrange from focus action"); 
                 state.needs_arrange = true;

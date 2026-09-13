@@ -30,7 +30,7 @@ A simple window manager/compositor for [River](https://codeberg.org/river/river)
 Will be added soon!
 
 
-### Building
+## Building
 
   - Build dependencies
     - river >= 0.4.x
@@ -44,7 +44,7 @@ sudo cp target/release/mackenzie /usr/local/bin/
 sudo cp mackenzie.desktop /usr/local/share/wayland-sessions/
 ```
 
-### Usage
+## Usage
 
 Mackenzie needs to be invoked using River:
 

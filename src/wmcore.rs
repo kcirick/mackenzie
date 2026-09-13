@@ -110,10 +110,14 @@ pub struct Window {
     new: bool,
     closed: bool,
     
+    pub app_id: String,
+    pub title: String,
+
     pub geom: Geometry,
     pub float_geom: Geometry,
 
     pub resize_requested: bool,
+    pub window_rules_requested: bool,
     pub at_scroll_edge: bool,
     pub is_floating: bool,
 
@@ -173,8 +177,8 @@ impl WMState {
         let seat = self.seat.as_mut().unwrap();
         if seat.pending_action != Action::None {
             self.ipc_update_requested = true;
+            Action::do_action(self, &proxy);
         }
-        Action::do_action(self, &proxy);
 
         self.remove_unneeded();
         self.init_new();
@@ -187,7 +191,7 @@ impl WMState {
         &mut self,
         proxy: &RiverWindowManagerV1,
     ) {
-        //println!("-----> [ handle_render_start ]");
+        println!("-----> [ handle_render_start ]");
         let seat = self.seat.as_mut().unwrap();
         match &seat.op {
             SeatOp::None => {}
@@ -226,14 +230,13 @@ impl WMState {
         self.outputs.retain(|_, output| {
             if output.removed {
                 output.proxy.destroy();
-                return false;
-            }
-            true
+                false
+            } else { true }
         });
 
         //--- Remove old windows
         let seat = self.seat.as_mut().unwrap();
-        for (_, window) in self.windows.iter().filter(|(_,w)| w.closed) {
+        for window in self.windows.values().filter(|w| w.closed) {
             if let SeatOp::Move {window_proxy, .. } | 
                 SeatOp::Resize { window_proxy, .. } = &seat.op {
                     if window_proxy == &window.proxy {
@@ -241,35 +244,30 @@ impl WMState {
                     }
                 }
 
-            let (index, column) = self.columns.iter_mut().enumerate().find(|(_,c)| c.id == window.column_id)
+            let (column_index, column) = self.columns.iter_mut().enumerate().find(|(_,c)| c.id == window.column_id)
                 .expect("column not found");
-            let nwins = self.windows.iter().filter(|(_, w)| w.column_id==column.id).count();
-            let column_id = column.id;
-            let column_index = index; 
+            let nwins = column.windows_id.len();
+            // this is the only window in the column, so safe to delete
             if nwins==1 {
-                // this is the only window in the column, so safe to delete
-                self.columns.retain(|c| c.id != column_id);
-                println!("column size = {} / column index = {}", self.columns.len(), column_index);
-                if window.proxy.id() == self.focused_window_id {
-                    if self.columns.len()>0 {
-                        let prev_column = self.columns.get(if column_index==0 {0} else {column_index-1}).unwrap();
-                        //let first_win_id_in_prev_column = prev_column.windows_id.get(0).unwrap();
-                        let (win_id, _win) = self.windows.iter()
-                            .find(|(_, w)| w.column_id==prev_column.id).unwrap();
+                if window.proxy.id()==self.focused_window_id {
+                    if self.columns.len()>1 {
+                        let prev_column = self.columns.get(if column_index==0 {1} else {column_index-1}).unwrap();
+                        let (win_id, win) = self.windows.iter()
+                            .find(|(_, w)| w.proxy.id() != window.proxy.id() && w.column_id==prev_column.id).unwrap();
                         self.focused_window_id = win_id.clone();
+                        seat.proxy.focus_window(&win.proxy);
                     } else {
                         self.focused_window_id = ObjectId::null(); 
                     }
                 }
             } else {
                 println!("remove nwins >1");
-                let old_win_index = column.windows_id.iter()
-                    .position(|wid| wid == &window.proxy.id()).unwrap();
                 column.windows_id.retain(|wid| wid != &window.proxy.id());
 
-                let new_win_index = if old_win_index==0 {0} else { old_win_index-1 };
-
-                self.focused_window_id = column.windows_id[new_win_index].clone();
+                let (win_id, win) = self.windows.iter()
+                    .find(|(_, w)| w.proxy.id() != window.proxy.id() && w.column_id==column.id).unwrap();
+                self.focused_window_id = win_id.clone();
+                seat.proxy.focus_window(&win.proxy);
                 // Flag for redistribution
                 column.redistribute_requested = true;
             }
@@ -290,6 +288,7 @@ impl WMState {
         &mut self, 
     ) {
         //--- Init new windows
+        let seat = self.seat.as_mut().unwrap();
         let mut last_column_index = 0;
         let mut max_column_id = 0;
         if let Some(window) = self.windows.get(&self.focused_window_id) {
@@ -300,50 +299,102 @@ impl WMState {
                 .map(|(_, w)| w.column_id).unwrap();
         }
 
-        let mut new_column_id = max_column_id + 1;
-        let focused_output = self.outputs.get_mut(&self.focused_output_id)
-            .expect("No focused outputs");
+        let focused_output = self.outputs.get(&self.focused_output_id).expect("No focused outputs");
         let output_area = focused_output.usable_area;
-        let ncols_focused_output = self.columns.iter().filter(|c| c.output_id==self.focused_output_id).count();
 
         let gap = self.config.layout.gap + self.config.window.border_width;
         let edge_gap = self.config.layout.scroll_edge_gap;
         let column_width_ratio = self.config.layout.default_column_width;
-        //let seat = self.seat.as_mut().unwrap();
-        for (_,window) in self.windows.iter_mut().filter(|(_, w)| w.new) {
+
+        let mut new_column_id = max_column_id;
+        for window in self.windows.values_mut().filter(|w| w.new) {
 
             // Set the new dimension (but not position)
-            //window.geom.x = output_area.x + gap;
-            //window.geom.y = output_area.y + gap;
             window.geom.w = (((output_area.w - 2*edge_gap - 2*gap) as f32) * column_width_ratio) as i32;
             window.geom.h = output_area.h - 2*gap;
             
             // Create a new column
-            create_new_column(
-                &mut self.columns,
-                new_column_id,
+            let mut new_column = create_new_column(
+                new_column_id+1,
                 last_column_index+1,
                 window,
                 focused_output,
                 self.focused_tag,
             );
+            // if floating, the new column width should be 0
+            if window.is_floating {
+                new_column.width = 0;
+            }
+
+            if self.columns.len() == 0 {
+                self.columns.push(new_column);
+            } else { 
+                self.columns.insert(last_column_index+1, new_column);
+            }
 
             // If there are no focused window, make this the focused window
-            if self.focused_window_id == ObjectId::null() || ncols_focused_output==0 {
+            if self.focused_window_id == ObjectId::null() {
                 self.focused_window_id = window.proxy.id();
-                //seat.proxy.focus_window(&window.proxy);
-                focused_output.focused_column_id = new_column_id;
+                seat.proxy.focus_window(&window.proxy);
             }
 
             window.proxy.use_ssd();
             window.new = false;
             
+            // Apply window rules
+            if window.window_rules_requested {
+                println!("AppId = {:?} / Title = {:?}", window.app_id, window.title);
+                let rules = self.config.rules.as_ref().unwrap().windowrules.clone();
+                for rule in rules {
+                    let match_app_id = match rule.app_id {
+                        Some(app_id) => {
+                            if app_id == window.app_id { true } else { false }
+                        }
+                        None => true
+                    };
+                    let match_title = match rule.title {
+                        Some(title) => {
+                            if title==window.title { true } else { false }
+                        }
+                        None => true
+                    };
+
+                    if !(match_app_id && match_title) { continue; }
+
+                    let column = self.columns.iter_mut().find(|c| c.id == window.column_id).unwrap();
+                    if let Some(set_floating) = rule.floating {
+                        println!("setting floating");
+                        window.is_floating = set_floating;
+                    }
+                    if let Some(width_ratio) = rule.width {
+                        if !window.is_floating {
+                            println!("setting width_ratio");
+                            window.geom.w = (((output_area.w - 2*edge_gap - 2*gap) as f32) * width_ratio) as i32;
+                            window.resize_requested = true;
+                            column.width = window.geom.w;
+                        }
+                    }
+                    if let Some(tag) = rule.tag {
+                        println!("setting tag");
+                        column.tag = 1<<(tag-1);
+                    }
+                    if let Some(output_name) = rule.output {
+                        println!("setting output to {output_name}");
+                        if let Some((_, new_output)) = self.outputs.iter().find(|(_,o)| o.name==output_name) {
+                            column.output_id = new_output.proxy.id().clone();
+                        } else {
+                            println!("output {output_name} not found");
+                        }
+                    }
+                }
+                window.window_rules_requested = false;
+            }
+            
             new_column_id += 1;
             last_column_index += 1;
 
             println!(" |-> new window geometry = {}x{}+{}+{}", window.geom.w, window.geom.h, window.geom.x, window.geom.y);
-            //window.set_position(window.geom.x, window.geom.y);
-            window.proxy.propose_dimensions(window.geom.w, window.geom.h);
+            window.resize_requested = true;
 
             println!("needs_arrange from init_new windows");
             self.needs_arrange = true;
@@ -353,8 +404,24 @@ impl WMState {
     fn manage(
         &mut self, 
     ) {
-        let seat = self.seat.as_mut().unwrap();
+        // Redistributes the windows into equal sizes inside a column
+        for column in self.columns.iter_mut().filter(|c| c.redistribute_requested) {
+            let focused_output = self.outputs.get(&self.focused_output_id).unwrap(); 
+            let output_area = focused_output.usable_area;
+            let gap = self.config.layout.gap + self.config.window.border_width;
 
+            let mut windows: Vec<&mut Window> = self.windows.values_mut()
+                .filter(|w| w.column_id == column.id && !w.is_floating)
+                .collect();
+            let nwins = windows.len() as i32;
+            for window in windows.iter_mut() {
+                window.geom.h = (output_area.h-gap*(nwins+1))/nwins;
+                window.resize_requested = true;
+            }
+            column.redistribute_requested = false;
+        }
+
+        let seat = self.seat.as_mut().unwrap();
         for window in self.windows.values_mut() {
             if let Some(_) = window.pointer_move_requested.take() {
                 seat.pointer_move(window);
@@ -362,43 +429,21 @@ impl WMState {
             if let Some(_) = window.pointer_resize_requested.take() {
                 seat.pointer_resize(window, window.pointer_resize_requested_edges);
             }
-        }
 
-        for column in self.columns.iter_mut().filter(|c| c.redistribute_requested) {
-            let focused_output = self.outputs.get(&self.focused_output_id).unwrap(); 
-            let output_area = focused_output.usable_area;
-            let gap = self.config.layout.gap + self.config.window.border_width;
-            let target_height = output_area.h-2*gap;
-
-            let nwins = column.windows_id.len();
-            let mut col_height = 0;
-            for i in 0..nwins {
-                let window = self.windows.get_mut(&column.windows_id[i]).unwrap();
-                if i<nwins-1 {
-                    col_height += window.geom.h + gap;
-                } else {
-                    window.geom.h = target_height - col_height;
-                    window.resize_requested = true;
-                }
-            }
-            column.redistribute_requested = false;
-        }
-
-        let seat = self.seat.as_mut().unwrap();
-        for (_,window) in &mut self.windows {
             // Sloppy focus on hovered windows (unless they are at the edge or sloppy focus is
             // disabled)
             if let Some(hovered_window_proxy) = seat.hovered.as_ref() {
-                if &window.proxy==hovered_window_proxy && !window.at_scroll_edge { 
-                    println!(" |--> focusing on a hovered window"); 
-                    if hovered_window_proxy.id() != self.focused_window_id {
+                if &window.proxy==hovered_window_proxy 
+                    && !window.at_scroll_edge
+                    && hovered_window_proxy.id()!=self.focused_window_id {
+                        println!(" |--> focusing on a hovered window"); 
+                        //seat.ignore_pointer_enter_event = true;
+                        //seat.hovered=None;
+                        seat.proxy.focus_window(&window.proxy);
+                        self.focused_window_id = window.proxy.id();
+
                         println!("needs_arrange from sloppy focus");
                         self.needs_arrange = true;
-                    }
-                    seat.proxy.focus_window(&window.proxy);
-                    self.focused_window_id = window.proxy.id();
-                    let output = self.outputs.get_mut(&self.focused_output_id).unwrap();
-                    output.focused_column_id = window.column_id;
                 }
             }
             // Click to raise
@@ -407,11 +452,14 @@ impl WMState {
                     if window.at_scroll_edge {
                         seat.proxy.focus_window(&window.proxy);
                         self.focused_window_id = window.proxy.id();
-                        let output = self.outputs.get_mut(&self.focused_output_id).unwrap();
-                        output.focused_column_id = window.column_id;
+
+                        println!("needs_arrange from click to raise");
                         self.needs_arrange = true;
                     }
-                    window.node.place_top();
+                    if window.is_floating {
+                        window.node.place_top();
+                    }
+                    seat.interacted = None;
                 }
             } 
 
@@ -427,11 +475,6 @@ impl WMState {
             seat.op_release = false;
         } else {
             seat.op_manage();
-        }
-
-        let focused_output = self.outputs.get(&self.focused_output_id).unwrap();
-        if let Some(ls_output) = &focused_output.ls_output {
-            ls_output.set_default();
         }
     }
 
@@ -514,11 +557,15 @@ impl Window {
 
             new: true,
             closed: false,
+
+            app_id: "".to_string(),
+            title: "".to_string(),
             
             geom: Geometry { x:0, y:0, w:0, h:0 },
             float_geom: Geometry { x:0, y:0, w:0, h:0 },
 
             resize_requested: false,
+            window_rules_requested: false,
             at_scroll_edge: false,
             is_floating: false,
 
@@ -658,7 +705,7 @@ impl Dispatch<RiverWindowV1, ()> for WMState {
         _qh: &QueueHandle<Self>,
     ){
         use crate::protocol::river_wm::river_window_v1::Event;
-        let (_, window) = match state.windows.iter_mut().find(|(_, w)| &w.proxy == proxy) {
+        let window = match state.windows.get_mut(&proxy.id()) {
             Some(window) => window,
             None => return,
         };
@@ -678,9 +725,19 @@ impl Dispatch<RiverWindowV1, ()> for WMState {
                     window.resize_requested = true;
                 }
             }
-            Event::AppId { app_id: _ } => { }
-            Event::Title { title: _ } => { }
-            Event::Parent { parent: _ } => { }
+            Event::AppId { app_id } => {
+                window.app_id = app_id.unwrap().clone();
+                window.window_rules_requested = true;
+            }
+            Event::Title { title } => { 
+                window.title = title.unwrap().clone();
+                window.window_rules_requested = true;
+            }
+            Event::Parent { parent: _ } => {
+                if let Some(window) = state.windows.values_mut().find(|w| &w.proxy == proxy) {
+                    window.is_floating = true;
+                }
+            }
             Event::DecorationHint { hint: _ } => { }
             Event::PointerMoveRequested { seat } => window.pointer_move_requested = Some(seat),
             Event::PointerResizeRequested { seat, edges } => {

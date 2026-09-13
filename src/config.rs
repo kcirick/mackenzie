@@ -7,6 +7,7 @@ use serde::Deserialize;
 pub struct Config {
     pub layout: LayoutConfig,
     pub window: WindowConfig, 
+    pub rules: Option<RulesConfig>,
     pub keybinds: Option<HashMap<String, ActionConfig>>,
     pub mousebinds: Option<HashMap<String, ActionConfig>>,
 }
@@ -31,6 +32,21 @@ pub struct WindowConfig {
 pub struct BorderConfig {
     pub width: i32,
     pub color: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct RulesConfig {
+    pub windowrules: Vec<WindowRule>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct WindowRule {
+    pub app_id: Option<String>,
+    pub title: Option<String>,
+    pub floating: Option<bool>,
+    pub width: Option<f32>,
+    pub tag: Option<u16>,
+    pub output: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -67,6 +83,7 @@ impl Config {
                 border_color_focused: "#FFFFFF".to_string(),
                 border_color_unfocused: "#333333".to_string(),
             },
+            rules: None,
             keybinds: None,
             mousebinds: None,
         }
