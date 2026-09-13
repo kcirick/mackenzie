@@ -1,0 +1,58 @@
+# Mackenzie config file: ~/.config/river/mackenzie.toml
+
+[layout]
+n_tags = 3
+gap = 10
+scroll_edge_gap = 10
+default_column_width = 0.6    # % of the output width
+
+[window]
+move_resize_step = 15
+border_width = 3
+border_color_focused = "#1793D0" 
+border_color_unfocused = "#333333"
+
+[rules]
+windowrules = [
+   # { app_id="id", title="some title", width=0.5, floating=true, tag=1, output="output_name" }
+   { app_id="org.xfce.mousepad", width = 0.8 },
+   #{ app_id="foot", width = 1.0, floating = true },
+]
+
+[keybinds]
+# See xkbcommon/xkbcommon-keysyms.h
+Mod4-space = { action = "spawn", args = ["foot"] }
+Mod4-Escape = { action = "quit" }
+
+XF86AudioMute = { action = "spawn", args = ["mousepad"] }
+
+Mod4-s = { action = "toggle_maximize_column" }
+Mod4-d = { action = "toggle_float" }
+Mod4-c = { action = "close" }
+
+Mod4-h = { action = "focus", args = ["left"] }
+Mod4-l = { action = "focus", args = ["right"] }
+Mod4-u = { action = "focus", args = ["up"] }
+Mod4-j = { action = "focus", args = ["down"] }
+Mod4-Shift-h = { action = "resize", args = ["left"] }
+Mod4-Shift-l = { action = "resize", args = ["right"] }
+Mod4-Shift-u = { action = "resize", args = ["up"] }
+Mod4-Shift-j = { action = "resize", args = ["down"] }
+
+Mod4-1 = { action = "focus_tag", args = ["1"] }
+Mod4-2 = { action = "focus_tag", args = ["2"] }
+Mod4-3 = { action = "focus_tag", args = ["3"] }
+Mod4-Shift-1 = { action = "move_to_tag", args = ["1"] }
+Mod4-Shift-2 = { action = "move_to_tag", args = ["2"] }
+Mod4-Shift-3 = { action = "move_to_tag", args = ["3"] }
+Mod4-Ctrl-1 = {action = "toggle_tag", args = ["1"] }
+Mod4-Ctrl-2 = {action = "toggle_tag", args = ["2"] }
+Mod4-Ctrl-3 = {action = "toggle_tag", args = ["3"] }
+
+Mod1-bracketleft  = { action = "consume_or_eject", args = ["left"] }
+Mod1-bracketright = { action = "consume_or_eject", args = ["right"] }
+
+[mousebinds]
+# See linux/input-event-codes.h
+Mod1-BTN_LEFT = { action = "move" }
+Mod1-BTN_RIGHT = { action = "resize" }
