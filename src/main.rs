@@ -29,10 +29,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     if args.len() > 1 {
         match args[1].as_str() {
-            "--version" => {
-                println!("mackenzie version v0.1");
-                return Ok(());
-            }
             "--get" => {
                 ipc_get(SOCKET_PATH, args[2].as_str());
                 return Ok(());
@@ -126,7 +122,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             
             if fds[1].revents & libc::POLLIN != 0 {
-                println!("IPC POLLIN");
                 wmstate.handle_ipc_connections();
             }
         } else {

@@ -12,6 +12,9 @@ pub fn ipc_get(socket: &str, arg: &str) {
     match arg {
         "tags" => ipc_tags(socket, IPCType::Get),
         "status" => ipc_status(socket, IPCType::Get),
+        "version" => {
+            println!("mackenzie version v0.1");
+        }
         _ => {
             eprintln!("Error: unknown argument '{}'", arg);
         }

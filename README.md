@@ -58,13 +58,12 @@ or add a line to exec mackenzie in the river init file `~/.config/river/init`
 For use as an ipc client:
 
 ```bash
-mackenzie (--get|--watch) tags
-           --get          status
-           --version
-           --action       focus_tag 1
-                          focus left
-                          quit 
-                          ... etc
+mackenzie --get     [status|version|tags]
+          --watch   tags
+          --action  focus_tag 1
+                    focus left
+                    quit 
+                    ... etc
 ```
 
 ### Configuration
