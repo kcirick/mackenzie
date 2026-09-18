@@ -7,6 +7,7 @@ use crate::protocol::river_wm::{
     river_pointer_binding_v1::RiverPointerBindingV1,
     river_xkb_binding_v1::RiverXkbBindingV1,
     river_xkb_bindings_v1::RiverXkbBindingsV1,
+    river_layer_shell_seat_v1::RiverLayerShellSeatV1,
 };
 
 use crate::actions::Action;
@@ -78,6 +79,8 @@ pub struct Seat {
     pub op_release: bool,
 
     pub ignore_pointer_enter_event: bool,
+
+    pub ls_seat: Option<RiverLayerShellSeatV1>,
 }
 
 #[derive(Debug)]
@@ -112,6 +115,7 @@ impl Seat {
             op_dy: 0,
             op_release: false,
             ignore_pointer_enter_event: false,
+            ls_seat: None,
         }
     }
 
@@ -258,10 +262,15 @@ impl Dispatch<RiverSeatV1, ()> for WMState {
                 (seat.cursor_x, seat.cursor_y) = (x, y);
                 for(oid, output) in &mut state.outputs {
                     let geom = output.full_area;
+                    println!("x = {x} / y = {y}");
                     if x >= geom.x && x < geom.x+geom.w && y >= geom.y && y < geom.y+geom.h {
                         if &state.focused_output_id != oid {
                             println!("focused output = {}", oid);
                             state.focused_output_id = oid.clone();
+                            if let Some(window) = state.windows.get(&output.focused_window_id) {
+                                seat.proxy.focus_window(&window.proxy);
+                                state.needs_arrange=true;
+                            }
                             if let Some(ls_output) = &output.ls_output {
                                 println!("setting ls_output");
                                 ls_output.set_default();
@@ -309,6 +318,33 @@ impl Dispatch<RiverPointerBindingV1, ObjectId> for WMState {
         match event {
             Event::Pressed => seat.pending_action = binding.action.clone(),
             Event::Released => { }
+        }
+    }
+}
+
+impl Dispatch<RiverLayerShellSeatV1, ()> for WMState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &RiverLayerShellSeatV1,
+        event: <RiverLayerShellSeatV1 as Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ){
+        use crate::protocol::river_wm::river_layer_shell_seat_v1::Event;
+        match event {
+            Event::FocusExclusive => {
+                println!("RLS-SeatV1::FocusExclusive");
+                
+            }
+            Event::FocusNonExclusive => {
+                println!("RLS-SeatV1::FocusNonExclusive");
+
+            }
+            Event::FocusNone => {
+                println!("RLS-SeatV1::FocusNone");
+
+            }
         }
     }
 }

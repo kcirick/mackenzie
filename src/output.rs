@@ -1,7 +1,7 @@
 use crate::protocol::river_wm::river_output_v1::RiverOutputV1;
 use crate::protocol::river_wm::river_layer_shell_output_v1::RiverLayerShellOutputV1;
 
-//use wayland_backend::client::ObjectId;
+use wayland_backend::client::ObjectId;
 use wayland_client::{protocol::wl_output, Connection, Dispatch, Proxy, QueueHandle};
 
 use crate::wmcore::WMState;
@@ -16,7 +16,9 @@ pub struct Output {
     pub full_area: Geometry,
     pub usable_area: Geometry,
     
+    pub focused_tag: u16,
     pub visible_tags: u16,
+    pub focused_window_id: ObjectId,
 
     pub ls_output: Option<RiverLayerShellOutputV1>,
 }
@@ -30,7 +32,7 @@ pub struct WlOutputInfo {
 
 //--- Implementation -----
 impl Output {
-    pub fn new(proxy: RiverOutputV1, current_tag: u16) -> Self {
+    pub fn new(proxy: RiverOutputV1) -> Self {
         Self {
             proxy,
             name: String::new(),
@@ -38,7 +40,9 @@ impl Output {
             full_area: Geometry { x:0, y:0, w:0, h:0 },
             usable_area: Geometry { x:0, y:0, w:0, h:0 },
 
-            visible_tags: current_tag,
+            focused_tag: (1 << 0),
+            visible_tags: (1 << 0),
+            focused_window_id: ObjectId::null(),
 
             ls_output:None,
         }
@@ -99,6 +103,44 @@ impl Dispatch<wl_output::WlOutput, ()> for WMState {
                 println!(" Output description: {description}");
             }
             _ => { }
+        }
+    }
+}
+
+impl Dispatch<RiverLayerShellOutputV1, ()> for WMState {
+    fn event(
+        state: &mut Self,
+        _proxy: &RiverLayerShellOutputV1,
+        event: <RiverLayerShellOutputV1 as Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        use crate::protocol::river_wm::river_layer_shell_output_v1::Event;
+        match event {
+            Event::NonExclusiveArea { x, y, width, height } => {
+                //setting non-exlusive area
+                let center_x = x + (width / 2);
+                let center_y = y + (height / 2);
+
+                for (id, this_output) in &mut state.outputs {
+                    let this_geom = this_output.full_area;
+
+                    if this_geom.w >0 && center_x >= this_geom.x 
+                        && center_x < this_geom.x + this_geom.w
+                        && center_y >= this_geom.y
+                        && center_y < this_geom.y + this_geom.h
+                    {
+                        println!("Reservation request for output {id}: {width}x{height}+{x}+{y}");
+                        this_output.usable_area = Geometry {x, y, w: width, h: height};
+                        //this_output.ls_output = Some(proxy.clone());
+                        for column in state.columns.iter_mut().filter(|c| c.output_id==this_output.proxy.id()) {
+                            column.redistribute_requested = true;
+                        }
+                        state.needs_arrange = true;
+                    }
+                }
+            }
         }
     }
 }

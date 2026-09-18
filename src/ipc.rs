@@ -9,11 +9,12 @@ enum IPCType {
 }
 
 pub fn ipc_get(socket: &str, arg: &str) {
+    const VERSION: &str = env!("CARGO_PKG_VERSION");
     match arg {
         "tags" => ipc_tags(socket, IPCType::Get),
         "status" => ipc_status(socket, IPCType::Get),
         "version" => {
-            println!("mackenzie version v0.1");
+            println!("mackenzie version v{}", VERSION);
         }
         _ => {
             eprintln!("Error: unknown argument '{}'", arg);

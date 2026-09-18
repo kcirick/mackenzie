@@ -24,20 +24,25 @@ windowrules = [
 Mod4-space = { action = "spawn", args = ["foot"] }
 Mod4-Escape = { action = "quit" }
 
-XF86AudioMute = { action = "spawn", args = ["mousepad"] }
-
 Mod4-s = { action = "toggle_maximize_column" }
 Mod4-d = { action = "toggle_float" }
 Mod4-c = { action = "close" }
 
-Mod4-h = { action = "focus", args = ["left"] }
-Mod4-l = { action = "focus", args = ["right"] }
-Mod4-u = { action = "focus", args = ["up"] }
-Mod4-j = { action = "focus", args = ["down"] }
-Mod4-Shift-h = { action = "resize", args = ["left"] }
-Mod4-Shift-l = { action = "resize", args = ["right"] }
-Mod4-Shift-u = { action = "resize", args = ["up"] }
-Mod4-Shift-j = { action = "resize", args = ["down"] }
+Mod4-Left = { action = "focus", args = ["left"] }
+Mod4-Right = { action = "focus", args = ["right"] }
+Mod4-Up = { action = "focus", args = ["up"] }
+Mod4-Down = { action = "focus", args = ["down"] }
+Mod4-Shift-Left = { action = "resize", args = ["left"] }
+Mod4-Shift-Right = { action = "resize", args = ["right"] }
+Mod4-Shift-Up = { action = "resize", args = ["up"] }
+Mod4-Shift-Down = { action = "resize", args = ["down"] }
+Mod4-Ctrl-Left = { action = "move", args = ["left"] }
+Mod4-Ctrl-Right = { action = "move", args = ["right"] }
+Mod4-Ctrl-Up = { action = "move", args = ["up"] }
+Mod4-Ctrl-Down = { action = "move", args = ["down"] }
+
+Mod4-bracketleft  = { action = "switch_columns", args = ["left"] }
+Mod4-bracketright = { action = "switch_columns", args = ["right"] }
 
 Mod4-1 = { action = "focus_tag", args = ["1"] }
 Mod4-2 = { action = "focus_tag", args = ["2"] }
@@ -49,10 +54,12 @@ Mod4-Ctrl-1 = {action = "toggle_tag", args = ["1"] }
 Mod4-Ctrl-2 = {action = "toggle_tag", args = ["2"] }
 Mod4-Ctrl-3 = {action = "toggle_tag", args = ["3"] }
 
-Mod1-bracketleft  = { action = "consume_or_eject", args = ["left"] }
-Mod1-bracketright = { action = "consume_or_eject", args = ["right"] }
+Mod1-bracketleft = { action = "focus_output", args = ["eDP-1"] }
+Mod1-bracketright = { action = "focus_output", args = ["HDMI-A-1"] }
+Mod1-Ctrl-bracketleft = { action = "move_to_output", args = ["eDP-1"] }
+Mod1-Ctrl-bracketright = { action = "move_to_output", args = ["HDMI-A-1"] }
 
 [mousebinds]
 # See linux/input-event-codes.h
-Mod1-BTN_LEFT = { action = "move" }
-Mod1-BTN_RIGHT = { action = "resize" }
+Mod1-BTN_LEFT = { action = "move_floating" }
+Mod1-BTN_RIGHT = { action = "resize_floating" }

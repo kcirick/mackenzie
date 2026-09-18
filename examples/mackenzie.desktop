@@ -1,6 +1,0 @@
-[Desktop Entry]
-Name=Mackenzie
-Comment=Scrolling Window Manager for River
-Exec=river -c mackenzie
-Type=Application
-

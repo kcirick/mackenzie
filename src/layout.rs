@@ -27,39 +27,51 @@ pub struct Column {
     pub output_id: ObjectId,
     pub windows_id: Vec<ObjectId>,
 
-    pub x_pos: i32,
-    pub width: i32,
+    pub geom: Geometry,
     pub prev_width: i32,
 
     pub tag: u16,
     pub is_maximized: bool,
     pub redistribute_requested: bool,
+    pub align_width_requested: bool,
 }
 
 //--- Functions -----
 pub fn create_new_column (
-    new_column_id: i16,
-    new_column_index: usize,
-    window: &mut Window,
     output: &Output,
-    focused_tag: u16,
+    columns_list: &Vec<Column>,
+    window: &mut Window,
+    config: &Config,
 ) -> Column {
+    let gap = config.layout.gap +config.window.border_width;
+
+    let mut max_column_id = 0;
+    if columns_list.len() > 0 {
+        max_column_id = columns_list.iter()
+            .max_by_key(|c| c.id)
+            .map(|c| c.id).unwrap();
+    }
+    let new_column_id = max_column_id+1;
+
     let mut column = Column { 
         id: new_column_id, 
-        x_pos: window.geom.x,
-        width: window.geom.w,
-        prev_width: window.geom.w,
         output_id: output.proxy.id().clone(),
         windows_id: Vec::new(),
-        tag: focused_tag,
+
+        geom: window.geom,
+        prev_width: window.geom.w,
+        
+        tag: output.focused_tag,
         is_maximized: false,
         redistribute_requested: false,
+        align_width_requested: false,
     };
 
+    column.geom.h = output.usable_area.h - 2*gap;
     window.column_id = new_column_id;
     column.windows_id.push(window.proxy.id().clone());
 
-    println!(" |--> Created a new column with id = {} at position {}", new_column_id, new_column_index);
+    //println!(" |--> Created a new column with id = {} at position {}", new_column_id, new_column_index);
     column
 }
 
@@ -70,11 +82,12 @@ fn render_focused_column(
     x_offset: i32,
     output_area: Geometry,
     config: &Config,
+    is_focused_output: bool,
 ) {
 
     let bw = config.window.border_width;
     let gap = config.layout.gap + bw;
-    let edge_gap = config.layout.scroll_edge_gap; 
+    let edge_gap = if column.is_maximized {0} else {config.layout.scroll_edge_gap}; 
 
     let mut y_offset = output_area.y + gap;
     let mut first_win = true;
@@ -117,11 +130,12 @@ fn render_focused_column(
             first_win = false;
         }
         window.geom.x += x_correction;
-        column.x_pos = window.geom.x;
+        column.geom.x = window.geom.x;
 
         // Draw borders
         let mut this_border_color = &config.window.border_color_unfocused;
-        if window.proxy.id()==focused_window.proxy.id() {
+        println!("window id = {} / focused_window id = {}", window.proxy.id(), focused_window.proxy.id());
+        if window.proxy.id()==focused_window.proxy.id() && is_focused_output {
             this_border_color = &config.window.border_color_focused;
         }
         let bcol = parse_hex_color(this_border_color.as_str());
@@ -165,10 +179,10 @@ fn render_unfocused_column(
         y_offset += window.geom.h + gap;
 
         window.geom.x = x_offset;
-        column.x_pos = window.geom.x;
+        column.geom.x = window.geom.x;
 
-        // if the window is completely out of range, then hide
         if direction == Direction::Right {
+            // if the window is completely out of range, then hide
             if window.geom.x > output_area.x + output_area.w {
                 window.proxy.hide();
             } else {
@@ -219,29 +233,30 @@ pub fn arrange(
     state: &mut WMState
 ) {
     println!(" |-> [ arrange ]");
-    for (output_id, output) in &state.outputs {
+    //let output_id = &state.focused_output_id;
+    //let output = state.outputs.get(output_id).unwrap();
+    for (output_id, output) in state.outputs.iter() {
         println!(" |--> output = {}", output_id);
 
         // Hide windows not in the visible tags
         for column in state.columns.iter()
             .filter(|c| &c.output_id == output_id && c.tag & output.visible_tags == 0) {
-            for window in state.windows.values().filter(|w| w.column_id==column.id) {
-                window.proxy.hide();
+                for window in state.windows.values().filter(|w| w.column_id==column.id) {
+                    window.proxy.hide();
+                }
             }
-        }
 
+        // List of columns in the output in the visible tags
         let mut visible_columns: Vec<&mut Column> = state.columns.iter_mut()
             .filter(|c| &c.output_id == output_id && c.tag & output.visible_tags > 0)
             .collect();
+
         let ncols_visible = visible_columns.len();
-
         if ncols_visible == 0 { continue; }
-
-        let focused_window = state.windows.get(&state.focused_window_id).expect("").clone();
-        //if &focused_window.output_id != output_id { continue };
-        println!(" |---> focused window = {}", focused_window.proxy.id());
-
         println!("ncols_visible = {ncols_visible}");
+
+        let focused_window = state.windows.get(&output.focused_window_id).expect("").clone();
+        println!(" |---> focused window = {}", focused_window.proxy.id());
 
         let focused_column_index = match visible_columns.iter().position(|c| c.id == focused_window.column_id) {
             Some(index) => index,
@@ -257,24 +272,23 @@ pub fn arrange(
         let mut x_offset = area.x;
         if focused_column_index>0 {
             let previous_column = visible_columns.get(focused_column_index-1).unwrap();
-            x_offset = previous_column.x_pos + previous_column.width + gap;
+            x_offset = previous_column.geom.x + previous_column.geom.w + gap;
         }
         println!("x_offset = {x_offset}");
 
         //Do the focused column first
         let focused_column = visible_columns.get_mut(focused_column_index).unwrap();
-        println!(" focused_column width = {}", focused_column.width);
-        if focused_column.width == 0 {
+        println!(" focused_column width = {} / output_id = {}", focused_column.geom.w, focused_column.output_id);
+        if focused_column.geom.w == 0 {
             for window_id in &focused_column.windows_id { 
                 let window = state.windows.get_mut(&window_id).unwrap();
 
                 let this_border_color = &state.config.window.border_color_focused;
                 let bcol = parse_hex_color(this_border_color.as_str());
                 window.proxy.set_borders(Edges::all(), bw, bcol.0, bcol.1, bcol.2, bcol.3);
-
                 window.node.place_top();
 
-                focused_column.x_pos = x_offset;
+                focused_column.geom.x = x_offset;
             }
         } else {
             render_focused_column(
@@ -284,19 +298,20 @@ pub fn arrange(
                 x_offset,
                 area,
                 &state.config,
+                focused_column.output_id==state.focused_output_id,
             );
         }
 
         // Iterate from the focused window to the end of the vector 
         let focused_column = visible_columns.get(focused_column_index).unwrap();
-        if focused_column.width==0 {
-            x_offset = focused_column.x_pos;
+        if focused_column.geom.w==0 {
+            x_offset = focused_column.geom.x;
         } else {
-            x_offset = focused_column.x_pos + focused_column.width + gap;
+            x_offset = focused_column.geom.x + focused_column.geom.w + gap;
         }
         for i in (focused_column_index+1)..ncols_visible {
             let column = visible_columns.get_mut(i).unwrap();
-            if column.width == 0 { 
+            if column.geom.w == 0 { 
                 for window_id in &column.windows_id {
                     let window = state.windows.get_mut(&window_id).unwrap();
 
@@ -317,15 +332,15 @@ pub fn arrange(
                 area,
                 &state.config,
             );
-            x_offset += column.width + gap;
+            x_offset += column.geom.w + gap;
         }
 
         // Iterate from the focused window to the beginning of the vector backwards 
         let focused_column = visible_columns.get(focused_column_index).unwrap();
-        x_offset = focused_column.x_pos;
+        x_offset = focused_column.geom.x;
         for i in (0..focused_column_index).rev() {
             let column = visible_columns.get_mut(i).unwrap();
-            if column.width == 0 { 
+            if column.geom.w == 0 { 
                 for window_id in &column.windows_id {
                     let window = state.windows.get_mut(&window_id).unwrap();
 
@@ -340,7 +355,7 @@ pub fn arrange(
                 continue; 
             }
 
-            x_offset -= column.width + gap;
+            x_offset -= column.geom.w + gap;
             render_unfocused_column(
                 Direction::Left,
                 column, 
@@ -349,7 +364,6 @@ pub fn arrange(
                 area,
                 &state.config,
             );
-            //x_offset -= gap;
         }
     }
 }

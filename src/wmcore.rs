@@ -29,7 +29,6 @@ use crate::protocol::river_wm::{
     river_window_v1::{Edges, RiverWindowV1},
     river_xkb_bindings_v1::RiverXkbBindingsV1,
     river_layer_shell_v1::RiverLayerShellV1,
-    river_layer_shell_output_v1::RiverLayerShellOutputV1,
 };
 
 //--- Enums -----
@@ -40,7 +39,6 @@ pub enum Direction {
     Up,
     Down,
 }
-
 
 //--- Helper functions -----
 pub fn parse_hex_color(hex: &str) -> (u32, u32, u32, u32) {
@@ -90,8 +88,6 @@ pub struct WMState {
     pub windows: HashMap<ObjectId, Window>,
 
     pub focused_output_id: ObjectId,
-    pub focused_window_id: ObjectId,
-    pub focused_tag: u16,
 
     pub needs_arrange: bool,
 
@@ -156,8 +152,8 @@ impl WMState {
             windows: HashMap::new(),
 
             focused_output_id: ObjectId::null(),
-            focused_window_id: ObjectId::null(),
-            focused_tag: (1 << 0),
+            //focused_window_id: ObjectId::null(),
+            //focused_tag: (1 << 0),
 
             needs_arrange: false,
 
@@ -236,6 +232,9 @@ impl WMState {
 
         //--- Remove old windows
         let seat = self.seat.as_mut().unwrap();
+        let focused_output = self.outputs.get_mut(&self.focused_output_id).unwrap();
+        let output_columns: Vec<&Column> = self.columns.iter().filter(|c| c.output_id == self.focused_output_id).collect();
+        let output_columns_len = output_columns.len();
         for window in self.windows.values().filter(|w| w.closed) {
             if let SeatOp::Move {window_proxy, .. } | 
                 SeatOp::Resize { window_proxy, .. } = &seat.op {
@@ -247,17 +246,18 @@ impl WMState {
             let (column_index, column) = self.columns.iter_mut().enumerate().find(|(_,c)| c.id == window.column_id)
                 .expect("column not found");
             let nwins = column.windows_id.len();
+
             // this is the only window in the column, so safe to delete
             if nwins==1 {
-                if window.proxy.id()==self.focused_window_id {
-                    if self.columns.len()>1 {
+                if window.proxy.id()==focused_output.focused_window_id {
+                    if output_columns_len>1 {
                         let prev_column = self.columns.get(if column_index==0 {1} else {column_index-1}).unwrap();
                         let (win_id, win) = self.windows.iter()
                             .find(|(_, w)| w.proxy.id() != window.proxy.id() && w.column_id==prev_column.id).unwrap();
-                        self.focused_window_id = win_id.clone();
+                        focused_output.focused_window_id = win_id.clone();
                         seat.proxy.focus_window(&win.proxy);
                     } else {
-                        self.focused_window_id = ObjectId::null(); 
+                        focused_output.focused_window_id = ObjectId::null(); 
                     }
                 }
             } else {
@@ -266,7 +266,7 @@ impl WMState {
 
                 let (win_id, win) = self.windows.iter()
                     .find(|(_, w)| w.proxy.id() != window.proxy.id() && w.column_id==column.id).unwrap();
-                self.focused_window_id = win_id.clone();
+                focused_output.focused_window_id = win_id.clone();
                 seat.proxy.focus_window(&win.proxy);
                 // Flag for redistribution
                 column.redistribute_requested = true;
@@ -288,54 +288,40 @@ impl WMState {
         &mut self, 
     ) {
         //--- Init new windows
-        let seat = self.seat.as_mut().unwrap();
+        let focused_output = self.outputs.get(&self.focused_output_id).expect("No focused outputs");
         let mut last_column_index = 0;
-        let mut max_column_id = 0;
-        if let Some(window) = self.windows.get(&self.focused_window_id) {
+        if let Some(window) = self.windows.get(&focused_output.focused_window_id) {
             last_column_index = self.columns.iter()
                 .position(|c| c.id == window.column_id).unwrap();
-            max_column_id = self.windows.iter()
-                .max_by_key(|(_, w)| w.column_id)
-                .map(|(_, w)| w.column_id).unwrap();
         }
 
-        let focused_output = self.outputs.get(&self.focused_output_id).expect("No focused outputs");
         let output_area = focused_output.usable_area;
-
         let gap = self.config.layout.gap + self.config.window.border_width;
         let edge_gap = self.config.layout.scroll_edge_gap;
         let column_width_ratio = self.config.layout.default_column_width;
 
-        let mut new_column_id = max_column_id;
         for window in self.windows.values_mut().filter(|w| w.new) {
 
             // Set the new dimension (but not position)
-            window.geom.w = (((output_area.w - 2*edge_gap - 2*gap) as f32) * column_width_ratio) as i32;
+            window.geom.w = (((output_area.w - 2*edge_gap - 3*gap) as f32) * column_width_ratio) as i32;
             window.geom.h = output_area.h - 2*gap;
             
             // Create a new column
             let mut new_column = create_new_column(
-                new_column_id+1,
-                last_column_index+1,
-                window,
                 focused_output,
-                self.focused_tag,
+                &self.columns,
+                window,
+                &self.config,
             );
             // if floating, the new column width should be 0
             if window.is_floating {
-                new_column.width = 0;
+                new_column.geom.w = 0;
             }
 
             if self.columns.len() == 0 {
                 self.columns.push(new_column);
             } else { 
                 self.columns.insert(last_column_index+1, new_column);
-            }
-
-            // If there are no focused window, make this the focused window
-            if self.focused_window_id == ObjectId::null() {
-                self.focused_window_id = window.proxy.id();
-                seat.proxy.focus_window(&window.proxy);
             }
 
             window.proxy.use_ssd();
@@ -358,7 +344,6 @@ impl WMState {
                         }
                         None => true
                     };
-
                     if !(match_app_id && match_title) { continue; }
 
                     let column = self.columns.iter_mut().find(|c| c.id == window.column_id).unwrap();
@@ -371,7 +356,7 @@ impl WMState {
                             println!("setting width_ratio");
                             window.geom.w = (((output_area.w - 2*edge_gap - 2*gap) as f32) * width_ratio) as i32;
                             window.resize_requested = true;
-                            column.width = window.geom.w;
+                            column.geom.w = window.geom.w;
                         }
                     }
                     if let Some(tag) = rule.tag {
@@ -389,8 +374,6 @@ impl WMState {
                 }
                 window.window_rules_requested = false;
             }
-            
-            new_column_id += 1;
             last_column_index += 1;
 
             println!(" |-> new window geometry = {}x{}+{}+{}", window.geom.w, window.geom.h, window.geom.x, window.geom.y);
@@ -404,25 +387,44 @@ impl WMState {
     fn manage(
         &mut self, 
     ) {
+        let seat = self.seat.as_mut().unwrap();
+        let focused_output = self.outputs.get_mut(&self.focused_output_id).unwrap(); 
+        if let Some(focused_window) = self.windows.get(&focused_output.focused_window_id) {
+            seat.proxy.focus_window(&focused_window.proxy);
+        }
+
         // Redistributes the windows into equal sizes inside a column
         for column in self.columns.iter_mut().filter(|c| c.redistribute_requested) {
-            let focused_output = self.outputs.get(&self.focused_output_id).unwrap(); 
+            println!("redistribute requested");
             let output_area = focused_output.usable_area;
             let gap = self.config.layout.gap + self.config.window.border_width;
 
-            let mut windows: Vec<&mut Window> = self.windows.values_mut()
+            let windows: Vec<&mut Window> = self.windows.values_mut()
                 .filter(|w| w.column_id == column.id && !w.is_floating)
                 .collect();
             let nwins = windows.len() as i32;
-            for window in windows.iter_mut() {
+            for window in windows {
                 window.geom.h = (output_area.h-gap*(nwins+1))/nwins;
                 window.resize_requested = true;
             }
             column.redistribute_requested = false;
         }
 
-        let seat = self.seat.as_mut().unwrap();
+        for column in self.columns.iter_mut().filter(|c| c.align_width_requested){
+            let windows: Vec<&mut Window> = self.windows.values_mut()
+                .filter(|w| w.column_id == column.id && !w.is_floating)
+                .collect();
+            for window in windows {
+                window.geom.w = column.geom.w;
+                window.resize_requested = true;
+            }
+            column.align_width_requested = false;
+        }
+
         for window in self.windows.values_mut() {
+            let column = self.columns.iter().find(|c| c.id == window.column_id).unwrap();
+            if column.output_id != focused_output.proxy.id() { continue; }
+
             if let Some(_) = window.pointer_move_requested.take() {
                 seat.pointer_move(window);
             }
@@ -430,17 +432,22 @@ impl WMState {
                 seat.pointer_resize(window, window.pointer_resize_requested_edges);
             }
 
+            // If there are no focused window, make this the focused window
+            //println!(" - - - - focuxed_window_id = {:?}", focused_output.focused_window_id);
+            if focused_output.focused_window_id == ObjectId::null() {
+                focused_output.focused_window_id = window.proxy.id();
+                seat.proxy.focus_window(&window.proxy);
+            }
+
             // Sloppy focus on hovered windows (unless they are at the edge or sloppy focus is
             // disabled)
             if let Some(hovered_window_proxy) = seat.hovered.as_ref() {
                 if &window.proxy==hovered_window_proxy 
                     && !window.at_scroll_edge
-                    && hovered_window_proxy.id()!=self.focused_window_id {
-                        println!(" |--> focusing on a hovered window"); 
-                        //seat.ignore_pointer_enter_event = true;
-                        //seat.hovered=None;
+                    && hovered_window_proxy.id()!=focused_output.focused_window_id {
+                        println!(" |--> focusing on a hovered window - output = {:?}", focused_output.proxy.id()); 
                         seat.proxy.focus_window(&window.proxy);
-                        self.focused_window_id = window.proxy.id();
+                        focused_output.focused_window_id = window.proxy.id();
 
                         println!("needs_arrange from sloppy focus");
                         self.needs_arrange = true;
@@ -451,20 +458,17 @@ impl WMState {
                 if &window.proxy==interacted_window_proxy {
                     if window.at_scroll_edge {
                         seat.proxy.focus_window(&window.proxy);
-                        self.focused_window_id = window.proxy.id();
+                        focused_output.focused_window_id = window.proxy.id();
 
                         println!("needs_arrange from click to raise");
                         self.needs_arrange = true;
-                    }
-                    if window.is_floating {
-                        window.node.place_top();
                     }
                     seat.interacted = None;
                 }
             } 
 
             if window.resize_requested {
-                println!("handling resize_requeted");
+                println!("handling resize_requested");
                 window.proxy.propose_dimensions(window.geom.w, window.geom.h);
                 window.resize_requested = false;
             }
@@ -667,7 +671,8 @@ impl Dispatch<RiverWindowManagerV1, ()> for WMState {
                 state.windows.insert(id.id(), Window::new(id.clone(), qh));
             }
             Event::Output { id } => { 
-                state.outputs.insert(id.id(), Output::new(id.clone(), state.focused_tag));
+                //state.outputs.insert(id.id(), Output::new(id.clone(), state.focused_tag));
+                state.outputs.insert(id.id(), Output::new(id.clone()));
                 let new_output = state.outputs.get_mut(&id.id()).unwrap();
                 if let Some(ls_manager) = &state.layer_shell_manager {
                     let ls_output = ls_manager.get_output(&id, qh, ());
@@ -677,12 +682,17 @@ impl Dispatch<RiverWindowManagerV1, ()> for WMState {
             }
             Event::Seat { id } => { 
                 println!("New Seat");
-                let mut this_seat = Seat::new(id);
+                let mut this_seat = Seat::new(id.clone());
                 let this_river_xkb = state.river_xkb.as_ref()
                     .expect("river_xkb_bindings_v1_missing");
                 this_seat.keybinds_from_config(this_river_xkb, &state.config, qh);
                 this_seat.mousebinds_from_config(&state.config, qh);
                 //seat.new = false;
+                if let Some(ls_manager) = &state.layer_shell_manager {
+                    let ls_seat = ls_manager.get_seat(&id, qh, ());
+                    this_seat.ls_seat = Some(ls_seat);
+                    println!("Registered layer-shell seat");
+                }
                 state.seat = Some(this_seat);
             }
         }
@@ -726,12 +736,16 @@ impl Dispatch<RiverWindowV1, ()> for WMState {
                 }
             }
             Event::AppId { app_id } => {
-                window.app_id = app_id.unwrap().clone();
-                window.window_rules_requested = true;
+                if let Some(this_app_id) = app_id.clone() {
+                    window.app_id = this_app_id;
+                    window.window_rules_requested = true;
+                }
             }
             Event::Title { title } => { 
-                window.title = title.unwrap().clone();
-                window.window_rules_requested = true;
+                if let Some(this_title) = title.clone() {
+                    window.title = this_title;
+                    window.window_rules_requested = true;
+                }
             }
             Event::Parent { parent: _ } => {
                 if let Some(window) = state.windows.values_mut().find(|w| &w.proxy == proxy) {
@@ -753,40 +767,6 @@ impl Dispatch<RiverWindowV1, ()> for WMState {
             Event::UnreliablePid { unreliable_pid: _ } => { }
             Event::PresentationHint { .. } => { }
             Event::Identifier { .. } => { }
-        }
-    }
-}
-
-impl Dispatch<RiverLayerShellOutputV1, ()> for WMState {
-    fn event(
-        state: &mut Self,
-        _proxy: &RiverLayerShellOutputV1,
-        event: <RiverLayerShellOutputV1 as Proxy>::Event,
-        _data: &(),
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-    ) {
-        use crate::protocol::river_wm::river_layer_shell_output_v1::Event;
-        match event {
-            Event::NonExclusiveArea { x, y, width, height } => {
-                //setting non-exlusive area
-                let center_x = x + (width / 2);
-                let center_y = y + (height / 2);
-
-                for (id, this_output) in &mut state.outputs {
-                    let this_geom = this_output.full_area;
-
-                    if this_geom.w >0 && center_x >= this_geom.x 
-                        && center_x < this_geom.x + this_geom.w
-                        && center_y >= this_geom.y
-                        && center_y < this_geom.y + this_geom.h
-                    {
-                        println!("Reservation request for output {id}: {width}x{height}+{x}+{y}");
-                        this_output.usable_area = Geometry {x, y, w: width, h: height};
-                        //this_output.ls_output = Some(proxy.clone());
-                    }
-                }
-            }
         }
     }
 }
