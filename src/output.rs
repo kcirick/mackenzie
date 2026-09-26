@@ -11,6 +11,7 @@ use crate::layout::Geometry;
 #[derive(Debug)]
 pub struct Output {
     pub proxy: RiverOutputV1,
+    pub wl_output_id: u32,
     pub name: String,
     pub removed: bool,
     pub full_area: Geometry,
@@ -25,9 +26,9 @@ pub struct Output {
 
 #[derive(Debug, Clone)]
 pub struct WlOutputInfo {
-    pub id: u32,
     pub proxy: wl_output::WlOutput,
     pub name: String,
+    //pub description: String,
 }
 
 //--- Implementation -----
@@ -35,6 +36,7 @@ impl Output {
     pub fn new(proxy: RiverOutputV1) -> Self {
         Self {
             proxy,
+            wl_output_id: 0,
             name: String::new(),
             removed: false,
             full_area: Geometry { x:0, y:0, w:0, h:0 },
@@ -64,21 +66,22 @@ impl Dispatch<RiverOutputV1, ()> for WMState {
         match event {
             Event::Removed => output.removed = true,
             Event::WlOutput { name: id } => { 
-                if let Some(wloutput) = state.wl_output_info.iter().find(|o| o.id == id) {
-                    println!("Match Wloutput with name {}", wloutput.name);
+                if let Some(wloutput) = state.wl_output_info.get(&id) {
+                    output.wl_output_id = id;
                     output.name = wloutput.name.clone();
                 }
             }
             Event::Position { x, y } => { 
-                println!("Output {:?} Position: +{}+{}", proxy.id(), x, y);
+                println!("Output {} Position: +{}+{}", proxy.id(), x, y);
                 output.full_area.x = x;
                 output.full_area.y = y;
             }
             Event::Dimensions { width, height } => { 
-                println!("Output {:?} Resolution: {}x{}", proxy.id(), width, height);
+                println!("Output {} Resolution: {}x{}", proxy.id(), width, height);
                 output.full_area.w = width;
                 output.full_area.h = height;
             }
+            _ => { }
         }
     }
 }
@@ -94,9 +97,12 @@ impl Dispatch<wl_output::WlOutput, ()> for WMState {
     ){
         match event {
             wl_output::Event::Name { name } => {
-                if let Some(wloutput) = state.wl_output_info.iter_mut().find(|o| &o.proxy == proxy) {
-                    wloutput.name = name;
-                    println!(" Output id: {} / name: {} - not registered", wloutput.id, wloutput.name);
+                if let Some((id, wloutput)) = state.wl_output_info.iter_mut().find(|(_,o)| &o.proxy == proxy) {
+                    wloutput.name = name.clone();
+                    //println!(" Output id: {} / name: {} - not registered", id, wloutput.name);
+                    if let Some(output) = state.outputs.values_mut().find(|o| &o.wl_output_id == id) {
+                        output.name = name.clone();
+                    }
                 }
             }
             wl_output::Event::Description { description } => {

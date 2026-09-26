@@ -7,13 +7,25 @@ use crate::protocol::river_wm::{
     river_pointer_binding_v1::RiverPointerBindingV1,
     river_xkb_binding_v1::RiverXkbBindingV1,
     river_xkb_bindings_v1::RiverXkbBindingsV1,
+    river_xkb_config_v1::{KeymapFormat, RiverXkbConfigV1},
+    river_xkb_keyboard_v1::RiverXkbKeyboardV1,
+    river_xkb_keymap_v1::RiverXkbKeymapV1,
     river_layer_shell_seat_v1::RiverLayerShellSeatV1,
+    river_input_manager_v1::RiverInputManagerV1,
+    river_input_device_v1::{Type as DeviceType, RiverInputDeviceV1},
+    river_libinput_config_v1::RiverLibinputConfigV1,
+    river_libinput_device_v1::RiverLibinputDeviceV1,
+    river_libinput_result_v1::RiverLibinputResultV1,
 };
 
 use crate::actions::Action;
 use crate::config::Config;
 use crate::wmcore::WMState;
 use crate::wmcore::Window;
+
+use std::io::Write;
+use tempfile::tempfile;
+use std::os::unix::io::AsFd;
 
 use wayland_backend::client::ObjectId;
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
@@ -55,7 +67,6 @@ fn parse_modmask(key_string: &str) -> (Modifiers, String) {
         }
         if i+1 == key_parts.len() { remaining_key = p.to_string(); }
     }
-    //println!("Remaining key = {remaining_key}");
     return (modmask, remaining_key)
 } 
 
@@ -63,13 +74,11 @@ fn parse_modmask(key_string: &str) -> (Modifiers, String) {
 #[derive(Debug)]
 pub struct Seat {
     pub proxy: RiverSeatV1,
-    pub new: bool,
-    //pub removed: bool,
-    //pub focused: Option<RiverWindowV1>,
     pub hovered: Option<RiverWindowV1>,
     pub interacted: Option<RiverWindowV1>,
     pub xkb_bindings: HashMap<ObjectId, XkbBinding>,
     pub pointer_bindings: HashMap<ObjectId, PointerBinding>,
+
     pub pending_action: Action,
     pub op: SeatOp,
     cursor_x: i32,
@@ -81,6 +90,14 @@ pub struct Seat {
     pub ignore_pointer_enter_event: bool,
 
     pub ls_seat: Option<RiverLayerShellSeatV1>,
+}
+
+#[derive(Debug)]
+pub struct DeviceInfo {
+    name: String,
+    device_type: Option<DeviceType>,
+    libinput_device: Option<RiverLibinputDeviceV1>,
+    //supports_tap: bool,
 }
 
 #[derive(Debug)]
@@ -100,13 +117,11 @@ impl Seat {
     pub fn new(proxy: RiverSeatV1) -> Self {
         Self {
             proxy,
-            new: true, 
-            //removed: false,
-            //focused: None,
             hovered: None,
             interacted: None,
             xkb_bindings: HashMap::new(),
             pointer_bindings: HashMap::new(),
+            
             pending_action: Action::None,
             op: SeatOp::None,
             cursor_x: 0,
@@ -262,19 +277,15 @@ impl Dispatch<RiverSeatV1, ()> for WMState {
                 (seat.cursor_x, seat.cursor_y) = (x, y);
                 for(oid, output) in &mut state.outputs {
                     let geom = output.full_area;
-                    println!("x = {x} / y = {y}");
-                    if x >= geom.x && x < geom.x+geom.w && y >= geom.y && y < geom.y+geom.h {
-                        if &state.focused_output_id != oid {
-                            println!("focused output = {}", oid);
-                            state.focused_output_id = oid.clone();
-                            if let Some(window) = state.windows.get(&output.focused_window_id) {
-                                seat.proxy.focus_window(&window.proxy);
-                                state.needs_arrange=true;
-                            }
-                            if let Some(ls_output) = &output.ls_output {
-                                println!("setting ls_output");
-                                ls_output.set_default();
-                            }
+                    if x >= geom.x && x < geom.x+geom.w && y >= geom.y && y < geom.y+geom.h && &state.focused_output_id != oid {
+                        println!(" -> PointerPosition: focused output = {}", oid);
+                        state.focused_output_id = oid.clone();
+                        if let Some(window) = state.windows.get(&output.focused_window_id) {
+                            seat.proxy.focus_window(&window.proxy);
+                            state.needs_arrange=true;
+                        }
+                        if let Some(ls_output) = &output.ls_output {
+                            ls_output.set_default();
                         }
                     }
                 }
@@ -345,6 +356,221 @@ impl Dispatch<RiverLayerShellSeatV1, ()> for WMState {
                 println!("RLS-SeatV1::FocusNone");
 
             }
+        }
+    }
+}
+
+impl Dispatch<RiverInputManagerV1, ()> for WMState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &RiverInputManagerV1,
+        _event: <RiverInputManagerV1 as Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        // input_manager events 
+        //use crate::protocol::river_wm::river_input_manager_v1::Event;
+        //match event {
+        //    Event::InputDevice {id: _} => {
+        //        println!("new input device");
+        //    }
+        //    Event::Finished => {
+        //        println!("input_manager finished");
+        //    }
+        //}
+    }
+
+    wayland_client::event_created_child!(
+        WMState,
+        RiverInputManagerV1, 
+        [ 1 => (RiverInputDeviceV1, ()) ]
+    );
+}
+
+impl Dispatch<RiverInputDeviceV1, ()> for WMState {
+    fn event(
+        state: &mut Self,
+        proxy: &RiverInputDeviceV1,
+        event: <RiverInputDeviceV1 as Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        use crate::protocol::river_wm::river_input_device_v1::Event;
+        let device_info = state.riverinput_devices.entry(proxy.clone()).or_insert(DeviceInfo {
+            name: String::new(),
+            device_type: None,
+            libinput_device: None,
+        });
+
+        match event {
+            Event::Name { name } => {
+                device_info.name = name;
+            }
+            Event::Type { _type } => {
+                device_info.device_type = _type.into_result().ok();
+            }
+            _ => { }
+        }
+    }
+}
+
+impl Dispatch<RiverLibinputConfigV1, ()> for WMState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &RiverLibinputConfigV1,
+        _event: <RiverLibinputConfigV1 as Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        // libinput_config events
+    }
+
+    wayland_client::event_created_child!(
+        WMState,
+        RiverLibinputConfigV1, 
+        [ 1 => (RiverLibinputDeviceV1, ()) ]
+    );
+}
+
+impl Dispatch<RiverLibinputDeviceV1, ()> for WMState {
+    fn event(
+        state: &mut Self,
+        proxy: &RiverLibinputDeviceV1,
+        event: <RiverLibinputDeviceV1 as Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
+        use crate::protocol::river_wm::river_libinput_device_v1::Event;
+        match event {
+            Event::InputDevice{ device } => {
+                let device_info = state.riverinput_devices.get_mut(&device).expect("no device_info found");
+                device_info.libinput_device = Some(proxy.clone());
+                //println!("HERE Device name = {}", device_info.name);
+            }
+            Event::TapSupport { finger_count } => {
+                if finger_count > 0 {
+                    if let Some(device_info) = state.riverinput_devices.values().find(|d| d.libinput_device==Some(proxy.clone())) {
+                        println!("Tap-to-click is supported on device {}", device_info.name);
+
+                        let enable_tap = crate::protocol::river_wm::river_libinput_device_v1::TapState::Enabled;
+
+                        proxy.set_tap(enable_tap, qh, ());
+                    }
+                }
+            }
+            _ => { }
+        }
+    }
+
+    wayland_client::event_created_child!(
+        WMState,
+        RiverLibinputDeviceV1, 
+        [ _ => (RiverLibinputResultV1, ()) ]
+    );
+}
+
+impl Dispatch<RiverLibinputResultV1, ()> for WMState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &RiverLibinputResultV1,
+        _event: <RiverLibinputResultV1 as Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        // libinput_result events
+    }
+}
+
+impl Dispatch<RiverXkbConfigV1, ()> for WMState {
+    fn event(
+        state: &mut Self,
+        _proxy: &RiverXkbConfigV1,
+        event: <RiverXkbConfigV1 as Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
+        use crate::protocol::river_wm::river_xkb_config_v1::Event;
+        
+        match event {
+            Event::XkbKeyboard { id } => {
+                state.keyboards.push(id.clone());
+
+                let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
+                let rules = "evdev".to_string();
+                let model = "pc105".to_string();
+                let layout = "us".to_string();
+                let variant = "".to_string();
+                let options = "compose:ralt".to_string();
+
+                let keymap = xkb::Keymap::new_from_names(
+                    &context,
+                    &rules,
+                    &model,
+                    &layout,
+                    &variant,
+                    Some(options),
+                    xkb::KEYMAP_COMPILE_NO_FLAGS,
+                );
+
+                if let Some(map) = keymap {
+                    let keymap_str = map.get_as_string(xkb::KEYMAP_FORMAT_TEXT_V1);
+                    let mut temp_file = tempfile().expect("");
+                    let _ = temp_file.write_all(keymap_str.as_bytes());
+
+                    if let Some(manager) = &state.xkb_config {
+                        let _river_keymap = manager.create_keymap(temp_file.as_fd(), KeymapFormat::TextV1, qh, ());
+                    }
+                }
+            }
+            _ => { }
+        }
+    }
+    wayland_client::event_created_child!(
+        WMState,
+        RiverXkbConfigV1,
+        [ 1 => (RiverXkbKeyboardV1, ()) ]
+    );
+}
+
+impl Dispatch<RiverXkbKeyboardV1, ()> for WMState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &RiverXkbKeyboardV1,
+        _event: <RiverXkbKeyboardV1 as Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<RiverXkbKeymapV1, ()> for WMState {
+    fn event(
+        state: &mut Self,
+        proxy: &RiverXkbKeymapV1,
+        event: <RiverXkbKeymapV1 as Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        use crate::protocol::river_wm::river_xkb_keymap_v1::Event;
+        match event {
+            Event::Success => {
+                //println!("Success: setting keymap");
+                for kb in &state.keyboards {
+                    kb.set_keymap(proxy);
+                }
+            }
+            Event::Failure {error_msg } => {
+                println!("Could not set keymap: {error_msg}");
+            }
+            //_ => { }
         }
     }
 }

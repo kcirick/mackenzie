@@ -15,6 +15,7 @@ use crate::output::Output;
 use crate::output::WlOutputInfo;
 use crate::seat::Seat;
 use crate::seat::SeatOp;
+use crate::seat::DeviceInfo;
 use crate::layout::Geometry;
 use crate::layout::Column;
 use crate::layout::create_new_column;
@@ -28,7 +29,13 @@ use crate::protocol::river_wm::{
     river_window_manager_v1::RiverWindowManagerV1,
     river_window_v1::{Edges, RiverWindowV1},
     river_xkb_bindings_v1::RiverXkbBindingsV1,
+    river_xkb_config_v1::RiverXkbConfigV1,
+    river_xkb_keyboard_v1::RiverXkbKeyboardV1,
+    //river_xkb_keymap_v1::RiverXkbKeymapV1,
     river_layer_shell_v1::RiverLayerShellV1,
+    river_input_manager_v1::RiverInputManagerV1,
+    river_input_device_v1::RiverInputDeviceV1,
+    river_libinput_config_v1::RiverLibinputConfigV1,
 };
 
 //--- Enums -----
@@ -77,15 +84,20 @@ pub struct WMState {
     pub river_wm: Option<RiverWindowManagerV1>,
     pub river_xkb: Option<RiverXkbBindingsV1>,
     pub layer_shell_manager: Option<RiverLayerShellV1>,
+    pub input_manager: Option<RiverInputManagerV1>,
+    pub riverinput_devices: HashMap<RiverInputDeviceV1, DeviceInfo>,
+    pub libinput_config: Option<RiverLibinputConfigV1>,
+    pub xkb_config: Option<RiverXkbConfigV1>,
 
     pub config: Config,
     
     // Master list of seat, outputs, workspaces, columns and windows
     pub seat: Option<Seat>,
-    pub wl_output_info: Vec<WlOutputInfo>,
+    pub wl_output_info: HashMap<u32, WlOutputInfo>,
     pub outputs: HashMap<ObjectId, Output>,
     pub columns: Vec<Column>,
     pub windows: HashMap<ObjectId, Window>,
+    pub keyboards: Vec<RiverXkbKeyboardV1>,
 
     pub focused_output_id: ObjectId,
 
@@ -110,12 +122,14 @@ pub struct Window {
     pub title: String,
 
     pub geom: Geometry,
+    pub prev_geom: Geometry,
     pub float_geom: Geometry,
 
     pub resize_requested: bool,
     pub window_rules_requested: bool,
     pub at_scroll_edge: bool,
     pub is_floating: bool,
+    pub is_fullscreen: bool,
 
     pointer_move_requested: Option<RiverSeatV1>,
     pointer_resize_requested: Option<RiverSeatV1>,
@@ -142,18 +156,21 @@ impl WMState {
             river_wm: None,
             river_xkb: None,
             layer_shell_manager: None,
+            input_manager: None,
+            riverinput_devices: HashMap::new(),
+            libinput_config: None,
+            xkb_config: None,
 
             config: Config::default(), 
             
             seat: None,
-            wl_output_info: Vec::new(),
+            wl_output_info: HashMap::new(),
             outputs: HashMap::new(),
             columns: Vec::new(),
             windows: HashMap::new(),
+            keyboards: Vec::new(),
 
             focused_output_id: ObjectId::null(),
-            //focused_window_id: ObjectId::null(),
-            //focused_tag: (1 << 0),
 
             needs_arrange: false,
 
@@ -175,6 +192,8 @@ impl WMState {
             self.ipc_update_requested = true;
             Action::do_action(self, &proxy);
         }
+        let seat = self.seat.as_mut().unwrap();
+        seat.pending_action = Action::None;
 
         self.remove_unneeded();
         self.init_new();
@@ -223,8 +242,17 @@ impl WMState {
         &mut self
     ) {
         //--- Remove old outputs
-        self.outputs.retain(|_, output| {
+        let mut next_output_id = ObjectId::null();
+        if let Some((id, _)) = self.outputs.iter().find(|(_, o)| !o.removed) {
+            next_output_id = id.clone();
+        }
+        self.outputs.retain(|oid, output| {
             if output.removed {
+                if next_output_id != ObjectId::null() {
+                    for column in self.columns.iter_mut().filter(|c| &c.output_id==oid) {
+                        column.output_id = next_output_id.clone();
+                    }
+                }
                 output.proxy.destroy();
                 false
             } else { true }
@@ -296,15 +324,16 @@ impl WMState {
         }
 
         let output_area = focused_output.usable_area;
-        let gap = self.config.layout.gap + self.config.window.border_width;
+        let bw = self.config.window.border_width;
+        let gap = self.config.layout.gap;
         let edge_gap = self.config.layout.scroll_edge_gap;
         let column_width_ratio = self.config.layout.default_column_width;
 
         for window in self.windows.values_mut().filter(|w| w.new) {
 
             // Set the new dimension (but not position)
-            window.geom.w = (((output_area.w - 2*edge_gap - 3*gap) as f32) * column_width_ratio) as i32;
-            window.geom.h = output_area.h - 2*gap;
+            window.geom.w = (((output_area.w - 2*edge_gap - 2*gap - 2*bw) as f32) * column_width_ratio) as i32;
+            window.geom.h = output_area.h - 2*gap - 2*bw;
             
             // Create a new column
             let mut new_column = create_new_column(
@@ -351,10 +380,20 @@ impl WMState {
                         println!("setting floating");
                         window.is_floating = set_floating;
                     }
+                    if let Some(set_maximized) = rule.maximized {
+                        println!("setting maximized");
+                        column.is_maximized = set_maximized;
+                        if set_maximized {
+                            column.prev_width = column.geom.w;
+                            column.geom.w = output_area.w - 2*gap - 2*bw;
+                            window.geom.w = column.geom.w;
+                            window.resize_requested = true;
+                        }
+                    }
                     if let Some(width_ratio) = rule.width {
                         if !window.is_floating {
                             println!("setting width_ratio");
-                            window.geom.w = (((output_area.w - 2*edge_gap - 2*gap) as f32) * width_ratio) as i32;
+                            window.geom.w = (((output_area.w - 2*edge_gap - 2*gap - 2*bw) as f32) * width_ratio) as i32;
                             window.resize_requested = true;
                             column.geom.w = window.geom.w;
                         }
@@ -391,20 +430,21 @@ impl WMState {
         let focused_output = self.outputs.get_mut(&self.focused_output_id).unwrap(); 
         if let Some(focused_window) = self.windows.get(&focused_output.focused_window_id) {
             seat.proxy.focus_window(&focused_window.proxy);
-        }
+        } 
 
         // Redistributes the windows into equal sizes inside a column
         for column in self.columns.iter_mut().filter(|c| c.redistribute_requested) {
             println!("redistribute requested");
             let output_area = focused_output.usable_area;
-            let gap = self.config.layout.gap + self.config.window.border_width;
+            let bw = self.config.window.border_width;
+            let gap = self.config.layout.gap;
 
             let windows: Vec<&mut Window> = self.windows.values_mut()
                 .filter(|w| w.column_id == column.id && !w.is_floating)
                 .collect();
             let nwins = windows.len() as i32;
             for window in windows {
-                window.geom.h = (output_area.h-gap*(nwins+1))/nwins;
+                window.geom.h = (output_area.h-gap*(nwins+1)-2*bw*nwins)/nwins;
                 window.resize_requested = true;
             }
             column.redistribute_requested = false;
@@ -445,7 +485,7 @@ impl WMState {
                 if &window.proxy==hovered_window_proxy 
                     && !window.at_scroll_edge
                     && hovered_window_proxy.id()!=focused_output.focused_window_id {
-                        println!(" |--> focusing on a hovered window - output = {:?}", focused_output.proxy.id()); 
+                        println!(" |--> focusing on a hovered window - output = {}", focused_output.proxy.id()); 
                         seat.proxy.focus_window(&window.proxy);
                         focused_output.focused_window_id = window.proxy.id();
 
@@ -566,12 +606,14 @@ impl Window {
             title: "".to_string(),
             
             geom: Geometry { x:0, y:0, w:0, h:0 },
+            prev_geom: Geometry { x:0, y:0, w:0, h:0 },
             float_geom: Geometry { x:0, y:0, w:0, h:0 },
 
             resize_requested: false,
             window_rules_requested: false,
             at_scroll_edge: false,
             is_floating: false,
+            is_fullscreen: false,
 
             pointer_move_requested: None,
             pointer_resize_requested: None,
@@ -599,9 +641,12 @@ impl Dispatch<wl_registry::WlRegistry, ()> for WMState {
     ) {
         if let wl_registry::Event::Global { name, interface, version } = 
         event {
-            const RIVER_WINDOW_MANAGER_V1_VERSION: u32 = 4;
+            const RIVER_WINDOW_MANAGER_V1_VERSION: u32 = 5;
             const RIVER_XKB_BINDINGS_V1_VERSION: u32 = 2;
             const RIVER_LAYER_SHELL_V1_VERSION: u32 = 1;
+            const RIVER_INPUT_MANAGER_V1_VERSION: u32 = 2;
+            const RIVER_LIBINPUT_CONFIG_V1_VERSION: u32 = 2;
+            const RIVER_XKB_CONFIG_V1_VERSION: u32 = 2; 
             const WL_OUTPUT_VERSION: u32 = 4;
             //println!("==> REGISTRY INTERFACE = {}", interface);
             match interface.as_str() {
@@ -617,11 +662,11 @@ impl Dispatch<wl_registry::WlRegistry, ()> for WMState {
                     state.river_wm = Some(wm);
                 }
                 "river_xkb_bindings_v1" => {
-                    let xkb = registry.bind::<RiverXkbBindingsV1, _, _> (
+                    let xkbb = registry.bind::<RiverXkbBindingsV1, _, _> (
                         name, 
                         RIVER_XKB_BINDINGS_V1_VERSION, 
                         qh, () );
-                    state.river_xkb = Some(xkb);
+                    state.river_xkb = Some(xkbb);
                 }
                 "river_layer_shell_v1" => {
                     let rls = registry.bind::<RiverLayerShellV1, _, _> (
@@ -630,12 +675,33 @@ impl Dispatch<wl_registry::WlRegistry, ()> for WMState {
                         qh, () );
                     state.layer_shell_manager = Some(rls);
                 }
+                "river_input_manager_v1" => {
+                    let rim = registry.bind::<RiverInputManagerV1, _, _> (
+                        name,
+                        RIVER_INPUT_MANAGER_V1_VERSION,
+                        qh, () );
+                    state.input_manager = Some(rim);
+                }
+                "river_libinput_config_v1" => {
+                    let rlc = registry.bind::<RiverLibinputConfigV1, _, _> (
+                        name,
+                        RIVER_LIBINPUT_CONFIG_V1_VERSION,
+                        qh, () );
+                    state.libinput_config = Some(rlc);
+                }
+                "river_xkb_config_v1" => {
+                    let xkbc = registry.bind::<RiverXkbConfigV1, _, _> (
+                        name,
+                        RIVER_XKB_CONFIG_V1_VERSION,
+                        qh, () );
+                    state.xkb_config = Some(xkbc);
+                }
                 "wl_output" => {
                     let output = registry.bind::<wl_output::WlOutput, _, _>(
                         name,
                         WL_OUTPUT_VERSION,
                         qh, () );
-                    state.wl_output_info.push(WlOutputInfo{id: name, proxy: output, name:"".to_string()});
+                    state.wl_output_info.insert(name, WlOutputInfo{proxy: output, name: String::new()});
                 }
                 _ => {}
             }
@@ -681,7 +747,7 @@ impl Dispatch<RiverWindowManagerV1, ()> for WMState {
                 }
             }
             Event::Seat { id } => { 
-                println!("New Seat");
+                println!("[ New Seat ]");
                 let mut this_seat = Seat::new(id.clone());
                 let this_river_xkb = state.river_xkb.as_ref()
                     .expect("river_xkb_bindings_v1_missing");
@@ -691,7 +757,6 @@ impl Dispatch<RiverWindowManagerV1, ()> for WMState {
                 if let Some(ls_manager) = &state.layer_shell_manager {
                     let ls_seat = ls_manager.get_seat(&id, qh, ());
                     this_seat.ls_seat = Some(ls_seat);
-                    println!("Registered layer-shell seat");
                 }
                 state.seat = Some(this_seat);
             }
@@ -767,6 +832,7 @@ impl Dispatch<RiverWindowV1, ()> for WMState {
             Event::UnreliablePid { unreliable_pid: _ } => { }
             Event::PresentationHint { .. } => { }
             Event::Identifier { .. } => { }
+            _ => { }
         }
     }
 }

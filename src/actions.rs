@@ -26,9 +26,11 @@ pub enum Action {
     ToggleTag(String),
     ToggleMaximizeColumn,
     ToggleFloat,
+    ToggleFullscreen,
     SwitchColumns(String),
     Close,
     Focus(String),
+    CenterFocused,
     Move(String),
     MoveFloating,
     Resize(String),
@@ -59,9 +61,11 @@ impl Action {
             "move_to_output" =>             Action::MoveToOutput(main),
             "toggle_maximize_column" =>     Action::ToggleMaximizeColumn,
             "toggle_float" =>               Action::ToggleFloat,
+            "toggle_fullscreen" =>          Action::ToggleFullscreen,
             "switch_columns" =>             Action::SwitchColumns(main),
             "quit" =>                       Action::Exit,
             "focus" =>                      Action::Focus(main),
+            "center_focused" =>             Action::CenterFocused,
             "move" =>                       Action::Move(main),
             "move_floating" =>              Action::MoveFloating,
             "resize" =>                     Action::Resize(main),
@@ -107,14 +111,14 @@ impl Action {
                 focused_column.is_maximized = ! focused_column.is_maximized;
                 if focused_column.is_maximized {
                     let output_area = focused_output.usable_area;
-                    let gap = state.config.layout.gap + state.config.window.border_width;
+                    let bw = state.config.window.border_width;
+                    let gap = state.config.layout.gap;
 
                     focused_column.prev_width = focused_column.geom.w;
-                    focused_column.geom.w = output_area.w - 2*gap;
+                    focused_column.geom.w = output_area.w - 2*gap -2*bw;
                 } else {
                     focused_column.geom.w = focused_column.prev_width;
                 }
-                //println!("column width = {} / prev = {}", focused_column.geom.w, focused_column.prev_width);
 
                 for window in state.windows.values_mut().filter(|w| w.column_id==focused_column.id) {
                     window.geom.w = focused_column.geom.w;
@@ -125,9 +129,19 @@ impl Action {
             }
 
             Action::ToggleFloat => {
-                let focused_window = state.windows.get_mut(&focused_output.focused_window_id).unwrap();
+                let focused_window = match state.windows.get_mut(&focused_output.focused_window_id) {
+                    Some(window) => window,
+                    None => {
+                        //seat.pending_action = Action::None;
+                        return
+                    }
+                };
                 let (focused_column_index, focused_column) = state.columns.iter_mut().enumerate()
                     .find(|(_, c)| c.id == focused_window.column_id).unwrap();
+                if focused_column.tag & focused_output.visible_tags == 0 {
+                    //seat.pending_action = Action::None;
+                    return;
+                }
                 let n_wins = focused_column.windows_id.len() as i32;
 
                 focused_window.is_floating = ! focused_window.is_floating;
@@ -155,6 +169,36 @@ impl Action {
                 state.needs_arrange = true;
             }
 
+            Action::ToggleFullscreen => {
+                let focused_window = match state.windows.get_mut(&focused_output.focused_window_id) {
+                    Some(window) => window,
+                    None => {
+                        //seat.pending_action = Action::None;
+                        return
+                    }
+                };
+                print!("focused_window = {:?}", focused_window.proxy.id());
+                let focused_column = state.columns.iter_mut()
+                    .find(|c| c.windows_id.contains(&focused_output.focused_window_id)).unwrap();
+                if focused_column.tag & focused_output.visible_tags == 0 {
+                    //seat.pending_action = Action::None;
+                    return;
+                }
+
+                focused_window.is_fullscreen = ! focused_window.is_fullscreen;
+                
+                if focused_window.is_fullscreen {
+                    focused_window.proxy.fullscreen(&focused_output.proxy);
+                    focused_window.proxy.inform_fullscreen();
+                    focused_window.prev_geom = focused_window.geom.clone();
+                } else {
+                    focused_window.proxy.exit_fullscreen();
+                    focused_window.proxy.inform_not_fullscreen();
+                    focused_window.geom = focused_window.prev_geom.clone();
+                    focused_window.resize_requested = true;
+                }
+            }
+
             Action::FocusOutput(output_str) => {
                 if output_str.len()==0 { return; }
 
@@ -177,6 +221,7 @@ impl Action {
                 let focused_output_geom = focused_output.full_area;
                 let focused_column = state.columns.iter_mut()
                     .find(|c| c.windows_id.contains(&focused_output.focused_window_id)).unwrap();
+                //let current_focused_window_id = &focused_output.focused_window_id;
 
                 if let Some(target_output) = state.outputs.values().find(|o| &o.name==output_str) {
                     focused_column.output_id = target_output.proxy.id().clone();
@@ -239,6 +284,14 @@ impl Action {
                 state.needs_arrange = true;
             }
             
+            Action::CenterFocused => {
+                let focused_column = state.columns.iter_mut()
+                    .find(|c| c.windows_id.contains(&focused_output.focused_window_id)).unwrap();
+                focused_column.center_requested = true;
+                println!("needs_arrange from center_focused action"); 
+                state.needs_arrange = true;
+            }
+
             Action::Focus(direction) => {
                 if direction.len()==0 { return; }
 
@@ -540,6 +593,6 @@ impl Action {
             
             Action::Exit => wm_proxy.exit_session(),
         }
-        seat.pending_action = Action::None;
+        //seat.pending_action = Action::None;
     }
 }

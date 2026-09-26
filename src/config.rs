@@ -45,6 +45,7 @@ pub struct WindowRule {
     pub title: Option<String>,
     pub floating: Option<bool>,
     pub width: Option<f32>,
+    pub maximized: Option<bool>,
     pub tag: Option<u16>,
     pub output: Option<String>,
 }
