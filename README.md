@@ -123,14 +123,14 @@ It is divided into 5 sections:
     Mod4-Shift-h = { action="focus", args=["left"] }
     XF86AudioMute = { action="spawn", args=["pactl", "set-sink-mute", "@DEFAULT_SINK@", "toggle"] }
     ```
-    - If no configuration is provided, it defaults to two hard-coded fallback defaults:
-        - Mod1+space spawns foot terminal emulator
-        - Mod1+q to quit the compositor
+    - If no configuration is provided, it defaults to two hard-coded fallback keybinds:
+        - `Mod1+space` spawns foot terminal emulator
+        - `Mod1+q` to quit the compositor
   - mousebinds - defines mouse bindings
     ```toml
     [mousebinds]
     Mod1-BTN_LEFT = { action="move_floating" }
-    Mod1-BTN_RIGHT = { action-"resize_floating" }
+    Mod1-BTN_RIGHT = { action="resize_floating" }
     ```
 
 
