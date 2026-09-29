@@ -132,14 +132,12 @@ impl Action {
                 let focused_window = match state.windows.get_mut(&focused_output.focused_window_id) {
                     Some(window) => window,
                     None => {
-                        //seat.pending_action = Action::None;
                         return
                     }
                 };
                 let (focused_column_index, focused_column) = state.columns.iter_mut().enumerate()
                     .find(|(_, c)| c.id == focused_window.column_id).unwrap();
                 if focused_column.tag & focused_output.visible_tags == 0 {
-                    //seat.pending_action = Action::None;
                     return;
                 }
                 let n_wins = focused_column.windows_id.len() as i32;
@@ -394,6 +392,11 @@ impl Action {
                     .find(|(_, c)| c.windows_id.contains(&focused_output.focused_window_id)).unwrap();
                 let focused_column_id = focused_column.id.clone();
 
+                // Don't do anything if it's a floating column
+                if focused_column.geom.w == 0 {
+                    return;
+                }
+
                 let n_wins = focused_column.windows_id.len() as i32;
                 let focused_window = state.windows.get_mut(&focused_output.focused_window_id).unwrap();
                 if direction.as_str() == "left" {
@@ -405,10 +408,12 @@ impl Action {
                                 c.output_id == state.focused_output_id && 
                                 c.tag & focused_output.visible_tags > 0) 
                         { 
-                            focused_window.column_id=next_column.id.clone();
-                            next_column.windows_id.push(focused_window.proxy.id().clone());
-                            next_column.redistribute_requested = true;
-                            next_column.align_width_requested = true;
+                            if next_column.geom.w>0 {
+                                focused_window.column_id=next_column.id.clone();
+                                next_column.windows_id.push(focused_window.proxy.id().clone());
+                                next_column.redistribute_requested = true;
+                                next_column.align_width_requested = true;
+                            }
                         }
                     }
                     // eject to a new column
@@ -437,10 +442,12 @@ impl Action {
                                 c.output_id == state.focused_output_id && 
                                 c.tag & focused_output.visible_tags > 0) 
                         { 
-                            focused_window.column_id=next_column.id.clone();
-                            next_column.windows_id.push(focused_window.proxy.id().clone());
-                            next_column.redistribute_requested = true;
-                            next_column.align_width_requested = true;
+                            if next_column.geom.w>0 {
+                                focused_window.column_id=next_column.id.clone();
+                                next_column.windows_id.push(focused_window.proxy.id().clone());
+                                next_column.redistribute_requested = true;
+                                next_column.align_width_requested = true;
+                            }
                         }
                     }
                     else {
@@ -492,6 +499,10 @@ impl Action {
                 //let focused_window = state.windows.get(&focused_output.focused_window_id).unwrap();
                 let focused_column = state.columns.iter_mut()
                     .find(|c| c.windows_id.contains(&focused_output.focused_window_id)).unwrap();
+                if focused_column.geom.w == 0 {
+                    return;
+                }
+
                 if direction.as_str() =="left" {
                     focused_column.geom.w -= state.config.window.move_resize_step;
 

@@ -99,6 +99,13 @@ It is divided into 5 sections:
     border_color_focused = "#1793D0"
     border_color_unfocused = "#333333FF"    # Specify the alpha with the last two digits
     ```
+  - inputs - configuration of the inputs
+    ```toml
+    [inputs]
+    xkb_layout = "us"
+    xkb_options = "compose:ralt"
+    touchpad_tap_click = true
+    ```
   - rules - window rules to apply 
     ```toml
     [rules]
@@ -116,6 +123,9 @@ It is divided into 5 sections:
     Mod4-Shift-h = { action="focus", args=["left"] }
     XF86AudioMute = { action="spawn", args=["pactl", "set-sink-mute", "@DEFAULT_SINK@", "toggle"] }
     ```
+    - If no configuration is provided, it defaults to two hard-coded fallback defaults:
+        - Mod1+space spawns foot terminal emulator
+        - Mod1+q to quit the compositor
   - mousebinds - defines mouse bindings
     ```toml
     [mousebinds]

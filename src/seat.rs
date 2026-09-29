@@ -20,6 +20,7 @@ use crate::protocol::river_wm::{
 
 use crate::actions::Action;
 use crate::config::Config;
+use crate::config::load_default_keybinds;
 use crate::wmcore::WMState;
 use crate::wmcore::Window;
 
@@ -149,6 +150,16 @@ impl Seat {
                 let proxy = river_xkb.get_xkb_binding(&self.proxy, keysym.raw(), modmask, qh, self.proxy.id());
                 proxy.enable();
                 let binding = XkbBinding{ proxy, action: my_action };
+                self.xkb_bindings.insert(binding.proxy.id(), binding);
+            }
+        } else {
+            println!(" ---> No keybinds found. Defaulting to minimal set");
+            let default_binds = load_default_keybinds();
+            for bind in default_binds {
+                let keysym = xkb::keysym_from_name(bind.key.as_str(), xkb::KEYSYM_NO_FLAGS);
+                let proxy = river_xkb.get_xkb_binding(&self.proxy, keysym.raw(), bind.modmask, qh, self.proxy.id());
+                proxy.enable();
+                let binding = XkbBinding { proxy, action: bind.action };
                 self.xkb_bindings.insert(binding.proxy.id(), binding);
             }
         }
@@ -456,7 +467,11 @@ impl Dispatch<RiverLibinputDeviceV1, ()> for WMState {
                     if let Some(device_info) = state.riverinput_devices.values().find(|d| d.libinput_device==Some(proxy.clone())) {
                         println!("Tap-to-click is supported on device {}", device_info.name);
 
-                        let enable_tap = crate::protocol::river_wm::river_libinput_device_v1::TapState::Enabled;
+                        let enable_tap = if state.config.inputs.touchpad_tap_click {
+                            crate::protocol::river_wm::river_libinput_device_v1::TapState::Enabled
+                        } else {
+                            crate::protocol::river_wm::river_libinput_device_v1::TapState::Disabled
+                        };
 
                         proxy.set_tap(enable_tap, qh, ());
                     }
@@ -504,9 +519,9 @@ impl Dispatch<RiverXkbConfigV1, ()> for WMState {
                 let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
                 let rules = "evdev".to_string();
                 let model = "pc105".to_string();
-                let layout = "us".to_string();
+                let layout = state.config.inputs.xkb_layout.clone();
                 let variant = "".to_string();
-                let options = "compose:ralt".to_string();
+                let options = state.config.inputs.xkb_options.clone();
 
                 let keymap = xkb::Keymap::new_from_names(
                     &context,

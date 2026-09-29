@@ -82,7 +82,7 @@ fn render_focused_column(
     column: &mut Column,
     windows: &mut HashMap<ObjectId, Window>,
     focused_window: &Window,
-    x_offset: i32,
+    mut x_offset: i32,
     output_area: Geometry,
     config: &Config,
     is_focused_output: bool,
@@ -96,21 +96,40 @@ fn render_focused_column(
     let mut first_win = true;
     let mut x_correction = 0;
 
-    for window_id in &column.windows_id { 
-        let window = windows.get_mut(&window_id).unwrap();
-
-        if window.is_floating { 
-            let mut this_border_color = &config.window.border_color_unfocused;
-            if window.proxy.id()==focused_window.proxy.id() {
-                this_border_color = &config.window.border_color_focused;
-            }
-            let bcol = parse_hex_color(this_border_color.as_str());
-            window.proxy.set_borders(Edges::all(), bw, bcol.0, bcol.1, bcol.2, bcol.3);
+    // If column width is 0, it means all the windows are floating
+    if column.geom.w == 0 {
+        for window_id in &column.windows_id { 
+            let window = windows.get_mut(&window_id).unwrap();
+            window.proxy.show();
+            window.proxy.set_clip_box(0, 0, 0, 0);
 
             window.node.place_top();
 
-            continue; 
+            let this_border_color = &config.window.border_color_floating;
+            let bcol = parse_hex_color(this_border_color.as_str());
+            window.proxy.set_borders(Edges::all(), bw, bcol.0, bcol.1, bcol.2, bcol.3);
+
+            // Check geometry boundary
+            column.geom.x = x_offset;
+            if (column.geom.x) < (output_area.x + edge_gap + gap + bw) {
+                x_correction = output_area.x + edge_gap + gap + bw - column.geom.x;
+            }
+            if (column.geom.x) > (output_area.x+output_area.w - edge_gap - gap - bw) {
+                x_correction = -(column.geom.x - (output_area.x + output_area.w) + edge_gap + gap + bw);
+            }
+            column.geom.x += x_correction;
         }
+        return;
+    }
+
+    // Center the column if it's requested
+    if column.center_requested {
+        x_offset = (output_area.x+output_area.w-column.geom.w)/2;
+        column.center_requested = false;
+    }
+
+    for window_id in &column.windows_id { 
+        let window = windows.get_mut(&window_id).unwrap();
 
         window.at_scroll_edge = false;
 
@@ -123,7 +142,7 @@ fn render_focused_column(
         window.proxy.set_clip_box(0, 0, 0, 0);
 
         if first_win {
-            // If the geometry is outside the output view, then shift
+            //If the geometry is outside the output view, then shift
             if (window.geom.x) < (output_area.x + edge_gap + gap + bw) {
                 x_correction = output_area.x + edge_gap + gap + bw - window.geom.x;
             }
@@ -162,18 +181,21 @@ fn render_unfocused_column(
 
     let mut y_offset = output_area.y + gap + bw;
 
+    // If column width is 0, it means all the windows are floating
+    if column.geom.w == 0 { 
+        for window_id in &column.windows_id {
+            let window = windows.get_mut(&window_id).unwrap();
+            window.proxy.show();
+
+            let this_border_color = &config.window.border_color_unfocused;
+            let bcol = parse_hex_color(this_border_color.as_str());
+            window.proxy.set_borders(Edges::all(), bw, bcol.0, bcol.1, bcol.2, bcol.3 );
+        }
+        return; 
+    }
+
     for window_id in &column.windows_id {
         let window = windows.get_mut(&window_id).unwrap();
-
-        if window.is_floating { 
-            let this_border_color = &config.window.border_color_unfocused;
-            let bcol = crate::wmcore::parse_hex_color(this_border_color.as_str());
-            window.proxy.set_borders(Edges::all(), bw, bcol.0, bcol.1, bcol.2, bcol.3 );
-        
-            window.node.place_top();
-
-            continue; 
-        }
 
         window.at_scroll_edge = false;
 
@@ -252,14 +274,13 @@ pub fn arrange(
             .collect();
 
         let ncols_visible = visible_columns.len();
-        if ncols_visible == 0 { continue; }
         println!("ncols_visible = {ncols_visible}");
+        if ncols_visible == 0 { continue; }
 
         let focused_window = match state.windows.get(&output.focused_window_id) {
             Some(window) => window.clone(),
             None => state.windows.values().find(|w| w.column_id == visible_columns[0].id).unwrap().clone(),
         };
-        //println!(" |---> focused window = {}", focused_window.proxy.id());
         
         // Don't need to do anything if focused window is fullscreen mode
         if focused_window.is_fullscreen { continue; }
@@ -277,61 +298,34 @@ pub fn arrange(
         // Compute the x_offset first
         let mut x_offset = area.x;
         if let Some(previous_column) = visible_columns.get(focused_column_index-1) {
-            x_offset = previous_column.geom.x + previous_column.geom.w + gap + 2*bw;
-        }
-        let focused_column = visible_columns.get_mut(focused_column_index).unwrap();
-        if focused_column.center_requested {
-            x_offset = (area.x+area.w-focused_column.geom.w)/2;
-            focused_column.center_requested = false;
-        }
-
-        //Do the focused column first
-        //println!(" focused_column width = {} / output_id = {}", focused_column.geom.w, focused_column.output_id);
-        if focused_column.geom.w == 0 {
-            for window_id in &focused_column.windows_id { 
-                let window = state.windows.get_mut(&window_id).unwrap();
-
-                let this_border_color = &state.config.window.border_color_focused;
-                let bcol = parse_hex_color(this_border_color.as_str());
-                window.proxy.set_borders(Edges::all(), bw, bcol.0, bcol.1, bcol.2, bcol.3);
-                window.node.place_top();
-
-                focused_column.geom.x = x_offset;
+            if previous_column.geom.w>0 {
+                x_offset = previous_column.geom.x + previous_column.geom.w + gap + 2*bw;
+            } else {
+                x_offset = previous_column.geom.x;
             }
-        } else {
-            render_focused_column(
-                focused_column, 
-                &mut state.windows, 
-                &focused_window,
-                x_offset,
-                area,
-                &state.config,
-                focused_column.output_id==state.focused_output_id,
-            );
         }
 
-        // Iterate from the focused window to the end of the vector 
+        //--- Render the focused column first
+        let focused_column = visible_columns.get_mut(focused_column_index).unwrap();
+        render_focused_column(
+            focused_column, 
+            &mut state.windows, 
+            &focused_window,
+            x_offset,
+            area,
+            &state.config,
+            focused_column.output_id==state.focused_output_id,
+        );
+
+        //--- Iterate from the focused window to the end of the vector 
         let focused_column = visible_columns.get(focused_column_index).unwrap();
         if focused_column.geom.w==0 {
-            x_offset = focused_column.geom.x + bw;
+            x_offset = focused_column.geom.x;
         } else {
             x_offset = focused_column.geom.x + focused_column.geom.w + gap + 2*bw;
         }
         for i in (focused_column_index+1)..ncols_visible {
             let column = visible_columns.get_mut(i).unwrap();
-            if column.geom.w == 0 { 
-                for window_id in &column.windows_id {
-                    let window = state.windows.get_mut(&window_id).unwrap();
-
-                    let this_border_color = &state.config.window.border_color_unfocused;
-                    let bcol = parse_hex_color(this_border_color.as_str());
-                    window.proxy.set_borders(Edges::all(), bw, bcol.0, bcol.1, bcol.2, bcol.3 );
-
-                    window.node.place_top();
-                }
-                continue; 
-            }
-
             render_unfocused_column(
                 Direction::Right,
                 column, 
@@ -340,29 +334,16 @@ pub fn arrange(
                 area,
                 &state.config,
             );
-            x_offset += column.geom.w + gap + 2*bw;
+            if column.geom.w > 0 { 
+                x_offset += column.geom.w + gap + 2*bw;
+            }
         }
 
-        // Iterate from the focused window to the beginning of the vector backwards 
+        //--- Iterate from the focused window to the beginning of the vector backwards 
         let focused_column = visible_columns.get(focused_column_index).unwrap();
         x_offset = focused_column.geom.x;
         for i in (0..focused_column_index).rev() {
             let column = visible_columns.get_mut(i).unwrap();
-            if column.geom.w == 0 { 
-                for window_id in &column.windows_id {
-                    let window = state.windows.get_mut(&window_id).unwrap();
-
-                    if window.is_floating { 
-                        let this_border_color = &state.config.window.border_color_unfocused;
-                        let bcol = crate::wmcore::parse_hex_color(this_border_color.as_str());
-                        window.proxy.set_borders(Edges::all(), bw, bcol.0, bcol.1, bcol.2, bcol.3 );
-
-                        window.node.place_top();
-                    }
-                }
-                continue; 
-            }
-
             x_offset -= column.geom.w + gap + 2*bw;
             render_unfocused_column(
                 Direction::Left,
@@ -372,6 +353,9 @@ pub fn arrange(
                 area,
                 &state.config,
             );
+            if column.geom.w == 0 {
+                x_offset += gap + 2*bw
+            }
         }
     }
 }

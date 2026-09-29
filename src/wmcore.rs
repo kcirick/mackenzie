@@ -31,7 +31,6 @@ use crate::protocol::river_wm::{
     river_xkb_bindings_v1::RiverXkbBindingsV1,
     river_xkb_config_v1::RiverXkbConfigV1,
     river_xkb_keyboard_v1::RiverXkbKeyboardV1,
-    //river_xkb_keymap_v1::RiverXkbKeymapV1,
     river_layer_shell_v1::RiverLayerShellV1,
     river_input_manager_v1::RiverInputManagerV1,
     river_input_device_v1::RiverInputDeviceV1,
@@ -300,6 +299,7 @@ impl WMState {
                 column.redistribute_requested = true;
             }
             println!("needs_arrange from remove_old windows");
+            self.ipc_update_requested = true;
             self.needs_arrange = true;
         }
         self.windows.retain(|_, w| !w.closed);
@@ -359,55 +359,56 @@ impl WMState {
             // Apply window rules
             if window.window_rules_requested {
                 println!("AppId = {:?} / Title = {:?}", window.app_id, window.title);
-                let rules = self.config.rules.as_ref().unwrap().windowrules.clone();
-                for rule in rules {
-                    let match_app_id = match rule.app_id {
-                        Some(app_id) => {
-                            if app_id == window.app_id { true } else { false }
-                        }
-                        None => true
-                    };
-                    let match_title = match rule.title {
-                        Some(title) => {
-                            if title==window.title { true } else { false }
-                        }
-                        None => true
-                    };
-                    if !(match_app_id && match_title) { continue; }
+                if let Some(rules) = self.config.rules.as_ref() {
+                    for rule in rules.windowrules.clone() {
+                        let match_app_id = match rule.app_id {
+                            Some(app_id) => {
+                                if app_id == window.app_id { true } else { false }
+                            }
+                            None => true
+                        };
+                        let match_title = match rule.title {
+                            Some(title) => {
+                                if title==window.title { true } else { false }
+                            }
+                            None => true
+                        };
+                        if !(match_app_id && match_title) { continue; }
 
-                    let column = self.columns.iter_mut().find(|c| c.id == window.column_id).unwrap();
-                    if let Some(set_floating) = rule.floating {
-                        println!("setting floating");
-                        window.is_floating = set_floating;
-                    }
-                    if let Some(set_maximized) = rule.maximized {
-                        println!("setting maximized");
-                        column.is_maximized = set_maximized;
-                        if set_maximized {
-                            column.prev_width = column.geom.w;
-                            column.geom.w = output_area.w - 2*gap - 2*bw;
-                            window.geom.w = column.geom.w;
-                            window.resize_requested = true;
+                        let column = self.columns.iter_mut().find(|c| c.id == window.column_id).unwrap();
+                        if let Some(set_floating) = rule.floating {
+                            println!("setting floating");
+                            window.is_floating = set_floating;
                         }
-                    }
-                    if let Some(width_ratio) = rule.width {
-                        if !window.is_floating {
-                            println!("setting width_ratio");
-                            window.geom.w = (((output_area.w - 2*edge_gap - 2*gap - 2*bw) as f32) * width_ratio) as i32;
-                            window.resize_requested = true;
-                            column.geom.w = window.geom.w;
+                        if let Some(set_maximized) = rule.maximized {
+                            println!("setting maximized");
+                            column.is_maximized = set_maximized;
+                            if set_maximized {
+                                column.prev_width = column.geom.w;
+                                column.geom.w = output_area.w - 2*gap - 2*bw;
+                                window.geom.w = column.geom.w;
+                                window.resize_requested = true;
+                            }
                         }
-                    }
-                    if let Some(tag) = rule.tag {
-                        println!("setting tag");
-                        column.tag = 1<<(tag-1);
-                    }
-                    if let Some(output_name) = rule.output {
-                        println!("setting output to {output_name}");
-                        if let Some((_, new_output)) = self.outputs.iter().find(|(_,o)| o.name==output_name) {
-                            column.output_id = new_output.proxy.id().clone();
-                        } else {
-                            println!("output {output_name} not found");
+                        if let Some(width_ratio) = rule.width {
+                            if !window.is_floating {
+                                println!("setting width_ratio");
+                                window.geom.w = (((output_area.w - 2*edge_gap - 2*gap - 2*bw) as f32) * width_ratio) as i32;
+                                window.resize_requested = true;
+                                column.geom.w = window.geom.w;
+                            }
+                        }
+                        if let Some(tag) = rule.tag {
+                            println!("setting tag");
+                            column.tag = 1<<(tag-1);
+                        }
+                        if let Some(output_name) = rule.output {
+                            println!("setting output to {output_name}");
+                            if let Some((_, new_output)) = self.outputs.iter().find(|(_,o)| o.name==output_name) {
+                                column.output_id = new_output.proxy.id().clone();
+                            } else {
+                                println!("output {output_name} not found");
+                            }
                         }
                     }
                 }
@@ -419,6 +420,7 @@ impl WMState {
             window.resize_requested = true;
 
             println!("needs_arrange from init_new windows");
+            self.ipc_update_requested = true;
             self.needs_arrange = true;
         }
     }
@@ -473,7 +475,6 @@ impl WMState {
             }
 
             // If there are no focused window, make this the focused window
-            //println!(" - - - - focuxed_window_id = {:?}", focused_output.focused_window_id);
             if focused_output.focused_window_id == ObjectId::null() {
                 focused_output.focused_window_id = window.proxy.id();
                 seat.proxy.focus_window(&window.proxy);
@@ -491,6 +492,7 @@ impl WMState {
 
                         println!("needs_arrange from sloppy focus");
                         self.needs_arrange = true;
+                        //seat.ignore_pointer_enter_event = true;
                 }
             }
             // Click to raise
