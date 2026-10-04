@@ -105,6 +105,7 @@ It is divided into 5 sections:
     xkb_layout = "us"
     xkb_options = "compose:ralt"
     touchpad_tap_click = true
+    touchpad_natural_scroll = true
     ```
   - rules - window rules to apply 
     ```toml

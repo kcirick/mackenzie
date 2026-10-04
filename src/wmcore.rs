@@ -3,6 +3,8 @@ use std::fmt::Debug;
 use std::io::{Read,Write};
 use std::os::unix::net::{UnixListener,UnixStream};
 
+use uniquevec::UniqueVec;
+
 use serde::{Serialize};
 use serde_json;
 
@@ -19,7 +21,7 @@ use crate::seat::DeviceInfo;
 use crate::layout::Geometry;
 use crate::layout::Column;
 use crate::layout::create_new_column;
-use crate::layout::arrange;
+use crate::layout::arrange_output;
 
 //--- Protocols -----
 use crate::protocol::river_wm::{
@@ -100,7 +102,9 @@ pub struct WMState {
 
     pub focused_output_id: ObjectId,
 
-    pub needs_arrange: bool,
+    pub needs_arrange_ids: UniqueVec<ObjectId>,
+
+    pub pointer_warp_requested: Option<(i32, i32)>,
 
     // IPC stuff
     pub ipc_update_requested: bool,
@@ -171,7 +175,9 @@ impl WMState {
 
             focused_output_id: ObjectId::null(),
 
-            needs_arrange: false,
+            needs_arrange_ids: UniqueVec::new(),
+
+            pointer_warp_requested: None,
 
             ipc_update_requested: false,
             ipc_listener: None, 
@@ -184,7 +190,7 @@ impl WMState {
         proxy: &RiverWindowManagerV1,
         _qh: &QueueHandle<Self>,
     ){
-        println!("\n[ handle_manage_start ]");
+        log::debug!("[ handle_manage_start ]");
 
         let seat = self.seat.as_mut().unwrap();
         if seat.pending_action != Action::None {
@@ -205,7 +211,7 @@ impl WMState {
         &mut self,
         proxy: &RiverWindowManagerV1,
     ) {
-        println!("-----> [ handle_render_start ]");
+        //log::debug!("[ handle_render_start ]");
         let seat = self.seat.as_mut().unwrap();
         match &seat.op {
             SeatOp::None => {}
@@ -229,10 +235,12 @@ impl WMState {
         }
 
         // Arrange should be here
-        if self.needs_arrange {
-            arrange(self);
-            self.needs_arrange = false;
+        for oid in self.needs_arrange_ids.iter() {
+            let output = self.outputs.get_mut(&oid).unwrap();
+            arrange_output(output, &self.focused_output_id, &mut self.columns, &mut self.windows, &self.config);
         }
+        self.needs_arrange_ids.clear();
+        assert!(self.needs_arrange_ids.is_empty());
 
         proxy.render_finish();
     }
@@ -263,6 +271,8 @@ impl WMState {
         let output_columns: Vec<&Column> = self.columns.iter().filter(|c| c.output_id == self.focused_output_id).collect();
         let output_columns_len = output_columns.len();
         for window in self.windows.values().filter(|w| w.closed) {
+            log::debug!("remove window id = {}", window.proxy.id());
+
             if let SeatOp::Move {window_proxy, .. } | 
                 SeatOp::Resize { window_proxy, .. } = &seat.op {
                     if window_proxy == &window.proxy {
@@ -279,28 +289,27 @@ impl WMState {
                 if window.proxy.id()==focused_output.focused_window_id {
                     if output_columns_len>1 {
                         let prev_column = self.columns.get(if column_index==0 {1} else {column_index-1}).unwrap();
-                        let (win_id, win) = self.windows.iter()
+                        let (win_id, _win) = self.windows.iter()
                             .find(|(_, w)| w.proxy.id() != window.proxy.id() && w.column_id==prev_column.id).unwrap();
                         focused_output.focused_window_id = win_id.clone();
-                        seat.proxy.focus_window(&win.proxy);
+                        //seat.proxy.focus_window(&win.proxy);
                     } else {
                         focused_output.focused_window_id = ObjectId::null(); 
                     }
                 }
             } else {
-                println!("remove nwins >1");
                 column.windows_id.retain(|wid| wid != &window.proxy.id());
 
-                let (win_id, win) = self.windows.iter()
+                let (win_id, _win) = self.windows.iter()
                     .find(|(_, w)| w.proxy.id() != window.proxy.id() && w.column_id==column.id).unwrap();
                 focused_output.focused_window_id = win_id.clone();
-                seat.proxy.focus_window(&win.proxy);
+                //seat.proxy.focus_window(&win.proxy);
                 // Flag for redistribution
                 column.redistribute_requested = true;
             }
-            println!("needs_arrange from remove_old windows");
+            log::debug!("needs_arrange from remove_old windows");
             self.ipc_update_requested = true;
-            self.needs_arrange = true;
+            self.needs_arrange_ids.push(self.focused_output_id.clone());
         }
         self.windows.retain(|_, w| !w.closed);
 
@@ -316,7 +325,7 @@ impl WMState {
         &mut self, 
     ) {
         //--- Init new windows
-        let focused_output = self.outputs.get(&self.focused_output_id).expect("No focused outputs");
+        let focused_output = self.outputs.get_mut(&self.focused_output_id).expect("No focused outputs");
         let mut last_column_index = 0;
         if let Some(window) = self.windows.get(&focused_output.focused_window_id) {
             last_column_index = self.columns.iter()
@@ -329,7 +338,8 @@ impl WMState {
         let edge_gap = self.config.layout.scroll_edge_gap;
         let column_width_ratio = self.config.layout.default_column_width;
 
-        for window in self.windows.values_mut().filter(|w| w.new) {
+        if let Some(window) = self.windows.values_mut().find(|w| w.new) {
+            log::debug!("new window id = {}", window.proxy.id());
 
             // Set the new dimension (but not position)
             window.geom.w = (((output_area.w - 2*edge_gap - 2*gap - 2*bw) as f32) * column_width_ratio) as i32;
@@ -355,10 +365,10 @@ impl WMState {
 
             window.proxy.use_ssd();
             window.new = false;
+            focused_output.focused_window_id = window.proxy.id().clone();
             
             // Apply window rules
             if window.window_rules_requested {
-                println!("AppId = {:?} / Title = {:?}", window.app_id, window.title);
                 if let Some(rules) = self.config.rules.as_ref() {
                     for rule in rules.windowrules.clone() {
                         let match_app_id = match rule.app_id {
@@ -375,13 +385,12 @@ impl WMState {
                         };
                         if !(match_app_id && match_title) { continue; }
 
+                        log::info!("Attempt to set rule for appid = {:?} / title = {:?}", window.app_id, window.title);
                         let column = self.columns.iter_mut().find(|c| c.id == window.column_id).unwrap();
                         if let Some(set_floating) = rule.floating {
-                            println!("setting floating");
                             window.is_floating = set_floating;
                         }
                         if let Some(set_maximized) = rule.maximized {
-                            println!("setting maximized");
                             column.is_maximized = set_maximized;
                             if set_maximized {
                                 column.prev_width = column.geom.w;
@@ -392,36 +401,33 @@ impl WMState {
                         }
                         if let Some(width_ratio) = rule.width {
                             if !window.is_floating {
-                                println!("setting width_ratio");
                                 window.geom.w = (((output_area.w - 2*edge_gap - 2*gap - 2*bw) as f32) * width_ratio) as i32;
                                 window.resize_requested = true;
                                 column.geom.w = window.geom.w;
                             }
                         }
                         if let Some(tag) = rule.tag {
-                            println!("setting tag");
                             column.tag = 1<<(tag-1);
                         }
                         if let Some(output_name) = rule.output {
-                            println!("setting output to {output_name}");
-                            if let Some((_, new_output)) = self.outputs.iter().find(|(_,o)| o.name==output_name) {
+                            if let Some(new_output) = self.outputs.values().find(|o| o.name==output_name) {
                                 column.output_id = new_output.proxy.id().clone();
                             } else {
-                                println!("output {output_name} not found");
+                                log::error!("output {output_name} not found");
                             }
                         }
                     }
                 }
                 window.window_rules_requested = false;
             }
-            last_column_index += 1;
+            //last_column_index += 1;
 
-            println!(" |-> new window geometry = {}x{}+{}+{}", window.geom.w, window.geom.h, window.geom.x, window.geom.y);
+            log::debug!(" |-> new window geometry = {}x{}+{}+{}", window.geom.w, window.geom.h, window.geom.x, window.geom.y);
             window.resize_requested = true;
 
-            println!("needs_arrange from init_new windows");
+            log::debug!("needs_arrange from init_new windows");
             self.ipc_update_requested = true;
-            self.needs_arrange = true;
+            self.needs_arrange_ids.push(self.focused_output_id.clone());
         }
     }
 
@@ -434,9 +440,14 @@ impl WMState {
             seat.proxy.focus_window(&focused_window.proxy);
         } 
 
+        // warp pointer if requested
+        if let Some((x, y)) = self.pointer_warp_requested.take() {
+            seat.proxy.pointer_warp(x, y);
+        }
+
         // Redistributes the windows into equal sizes inside a column
         for column in self.columns.iter_mut().filter(|c| c.redistribute_requested) {
-            println!("redistribute requested");
+            log::debug!("handling redistribute requested");
             let output_area = focused_output.usable_area;
             let bw = self.config.window.border_width;
             let gap = self.config.layout.gap;
@@ -486,13 +497,12 @@ impl WMState {
                 if &window.proxy==hovered_window_proxy 
                     && !window.at_scroll_edge
                     && hovered_window_proxy.id()!=focused_output.focused_window_id {
-                        println!(" |--> focusing on a hovered window - output = {}", focused_output.proxy.id()); 
+                        log::debug!(" |--> focusing on a hovered window - output = {}", focused_output.proxy.id()); 
                         seat.proxy.focus_window(&window.proxy);
                         focused_output.focused_window_id = window.proxy.id();
 
-                        println!("needs_arrange from sloppy focus");
-                        self.needs_arrange = true;
-                        //seat.ignore_pointer_enter_event = true;
+                        log::debug!("needs_arrange from sloppy focus");
+                        self.needs_arrange_ids.push(self.focused_output_id.clone());
                 }
             }
             // Click to raise
@@ -502,15 +512,15 @@ impl WMState {
                         seat.proxy.focus_window(&window.proxy);
                         focused_output.focused_window_id = window.proxy.id();
 
-                        println!("needs_arrange from click to raise");
-                        self.needs_arrange = true;
+                        log::debug!("needs_arrange from click to raise");
+                        self.needs_arrange_ids.push(self.focused_output_id.clone());
                     }
                     seat.interacted = None;
                 }
             } 
 
             if window.resize_requested {
-                println!("handling resize_requested");
+                log::debug!("handling resize_requested");
                 window.proxy.propose_dimensions(window.geom.w, window.geom.h);
                 window.resize_requested = false;
             }
@@ -559,7 +569,7 @@ impl WMState {
         if self.ipc_clients.is_empty() { return; }
 
         let json_workspace = self.get_tags_status_json(); 
-        println!("Workspace Info: \n{}", json_workspace);
+        log::debug!("Workspace Info: \n{}", json_workspace);
 
         self.ipc_clients.retain_mut(|c| Write::write_all(c, json_workspace.as_bytes()).is_ok());
     }
@@ -650,11 +660,10 @@ impl Dispatch<wl_registry::WlRegistry, ()> for WMState {
             const RIVER_LIBINPUT_CONFIG_V1_VERSION: u32 = 2;
             const RIVER_XKB_CONFIG_V1_VERSION: u32 = 2; 
             const WL_OUTPUT_VERSION: u32 = 4;
-            //println!("==> REGISTRY INTERFACE = {}", interface);
             match interface.as_str() {
                 "river_window_manager_v1" => {
                     if version < RIVER_WINDOW_MANAGER_V1_VERSION {
-                        eprintln!("Server river_window_manager_v1 = v{version}");
+                        log::error!("Server river_window_manager_v1 = v{version}");
                         std::process::exit(1);
                     }
                     let wm = registry.bind::<RiverWindowManagerV1, _, _> (
@@ -703,7 +712,7 @@ impl Dispatch<wl_registry::WlRegistry, ()> for WMState {
                         name,
                         WL_OUTPUT_VERSION,
                         qh, () );
-                    state.wl_output_info.insert(name, WlOutputInfo{proxy: output, name: String::new()});
+                    state.wl_output_info.insert(name, WlOutputInfo{proxy: output, name: String::new(), description: String::new()});
                 }
                 _ => {}
             }
@@ -723,7 +732,7 @@ impl Dispatch<RiverWindowManagerV1, ()> for WMState {
         use crate::protocol::river_wm::river_window_manager_v1::Event;
         match event {
             Event::Unavailable => {
-                eprintln!("Error: Another WM is already running");
+                log::error!("Error: Another WM is already running");
                 std::process::exit(1);
             }
             Event::Finished => std::process::exit(0),
@@ -739,26 +748,27 @@ impl Dispatch<RiverWindowManagerV1, ()> for WMState {
                 state.windows.insert(id.id(), Window::new(id.clone(), qh));
             }
             Event::Output { id } => { 
+                log::info!("[ New Output ]");
                 //state.outputs.insert(id.id(), Output::new(id.clone(), state.focused_tag));
                 state.outputs.insert(id.id(), Output::new(id.clone()));
                 let new_output = state.outputs.get_mut(&id.id()).unwrap();
                 if let Some(ls_manager) = &state.layer_shell_manager {
                     let ls_output = ls_manager.get_output(&id, qh, ());
                     new_output.ls_output = Some(ls_output);
-                    println!("Registered layer-shell output");
+                    log::info!("Registered layer-shell output");
                 }
             }
             Event::Seat { id } => { 
-                println!("[ New Seat ]");
+                log::info!("[ New Seat ]");
                 let mut this_seat = Seat::new(id.clone());
                 let this_river_xkb = state.river_xkb.as_ref()
                     .expect("river_xkb_bindings_v1_missing");
                 this_seat.keybinds_from_config(this_river_xkb, &state.config, qh);
                 this_seat.mousebinds_from_config(&state.config, qh);
-                //seat.new = false;
                 if let Some(ls_manager) = &state.layer_shell_manager {
                     let ls_seat = ls_manager.get_seat(&id, qh, ());
                     this_seat.ls_seat = Some(ls_seat);
+                    log::info!("Registered layer-shell seat");
                 }
                 state.seat = Some(this_seat);
             }
@@ -796,8 +806,7 @@ impl Dispatch<RiverWindowV1, ()> for WMState {
             } => { }
             Event::Dimensions { width, height } => {
                 if window.geom.w != width || window.geom.h != height {
-                    //println!("Event::Dimensions");
-                    //println!("window {}x{}, event geom {}x{}", window.geom.w, window.geom.h, width, height);
+                    //log::debug!("Event::Dimensions: window {}x{}, event geom {}x{}", window.geom.w, window.geom.h, width, height);
                     (window.geom.w, window.geom.h) = (width, height);
                     window.resize_requested = true;
                 }

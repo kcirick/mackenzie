@@ -28,7 +28,7 @@ pub struct Output {
 pub struct WlOutputInfo {
     pub proxy: wl_output::WlOutput,
     pub name: String,
-    //pub description: String,
+    pub description: String,
 }
 
 //--- Implementation -----
@@ -72,12 +72,12 @@ impl Dispatch<RiverOutputV1, ()> for WMState {
                 }
             }
             Event::Position { x, y } => { 
-                println!("Output {} Position: +{}+{}", proxy.id(), x, y);
+                log::info!("Output {} Position: +{}+{}", proxy.id(), x, y);
                 output.full_area.x = x;
                 output.full_area.y = y;
             }
             Event::Dimensions { width, height } => { 
-                println!("Output {} Resolution: {}x{}", proxy.id(), width, height);
+                log::info!("Output {} Resolution: {}x{}", proxy.id(), width, height);
                 output.full_area.w = width;
                 output.full_area.h = height;
             }
@@ -98,15 +98,18 @@ impl Dispatch<wl_output::WlOutput, ()> for WMState {
         match event {
             wl_output::Event::Name { name } => {
                 if let Some((id, wloutput)) = state.wl_output_info.iter_mut().find(|(_,o)| &o.proxy == proxy) {
+                    log::info!("Output id: {id} / name: {name}");
                     wloutput.name = name.clone();
-                    //println!(" Output id: {} / name: {} - not registered", id, wloutput.name);
                     if let Some(output) = state.outputs.values_mut().find(|o| &o.wl_output_id == id) {
                         output.name = name.clone();
                     }
                 }
             }
             wl_output::Event::Description { description } => {
-                println!(" Output description: {description}");
+                if let Some((id, wloutput)) = state.wl_output_info.iter_mut().find(|(_,o)| &o.proxy == proxy) {
+                    log::info!("Output id: {id} / description: {description}");
+                    wloutput.description = description.clone();
+                }
             }
             _ => { }
         }
@@ -137,13 +140,13 @@ impl Dispatch<RiverLayerShellOutputV1, ()> for WMState {
                         && center_y >= this_geom.y
                         && center_y < this_geom.y + this_geom.h
                     {
-                        println!("Reservation request for output {id}: {width}x{height}+{x}+{y}");
+                        log::info!("Reservation request for output {id}: {width}x{height}+{x}+{y}");
                         this_output.usable_area = Geometry {x, y, w: width, h: height};
                         //this_output.ls_output = Some(proxy.clone());
-                        for column in state.columns.iter_mut().filter(|c| c.output_id==this_output.proxy.id()) {
+                        for column in state.columns.iter_mut().filter(|c| &c.output_id==id) {
                             column.redistribute_requested = true;
                         }
-                        state.needs_arrange = true;
+                        state.needs_arrange_ids.push(id.clone());
                     }
                 }
             }

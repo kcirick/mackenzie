@@ -25,28 +25,29 @@ const SOCKET_PATH: &str = "/tmp/mackenzie.sock";
 //--- Main function -----
 fn main() -> Result<(), Box<dyn std::error::Error>> {
 
+    // Initialize the logger at the very beginning
+    let env = env_logger::Env::default().filter_or("RUST_LOG", "info");
+    env_logger::init_from_env(env);
+
     // parse argument
     let args: Vec<String> = std::env::args().collect();
     if args.len() > 1 {
         match args[1].as_str() {
             "--get" => {
                 ipc_get(SOCKET_PATH, args[2].as_str());
-                return Ok(());
             }
             "--watch" => {
                 ipc_watch(SOCKET_PATH, args[2].as_str());
-                return Ok(());
             }
             "--action" => {
                 let action_args = args[2..].join(" ");
                 ipc_action(SOCKET_PATH, action_args.as_str());
-                return Ok(());
             }
             _ => {
-                eprintln!("Error: Unknown argument '{}'", args[1]);
-                std::process::exit(1);
+                log::error!("Error: Unknown argument '{}'", args[1]);
             }
         }
+        return Ok(());
     }
 
     // Load config
@@ -73,7 +74,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Round trip to process the get_registry event and bind interfaces
     event_queue.roundtrip(&mut wmstate)?;
     if wmstate.river_wm.is_none() {
-        eprintln!("river_window_manager_v1 global not found! Is river running?");
+        log::error!("river_window_manager_v1 global not found! Is river running?");
         std::process::exit(1);
     }
 

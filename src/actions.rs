@@ -125,7 +125,7 @@ impl Action {
                     window.resize_requested = true;
                 }
                 println!("needs_arrange from toggle_maximimize action"); 
-                state.needs_arrange = true;
+                state.needs_arrange_ids.push(state.focused_output_id.clone());
             }
 
             Action::ToggleFloat => {
@@ -164,7 +164,7 @@ impl Action {
                     focused_column.redistribute_requested = true;
                 }
                 println!("needs_arrange from toggle_float action"); 
-                state.needs_arrange = true;
+                state.needs_arrange_ids.push(state.focused_output_id.clone());
             }
 
             Action::ToggleFullscreen => {
@@ -204,8 +204,13 @@ impl Action {
                 //let focused_output_id = focused_output.proxy.id();
                 if let Some(output) = state.outputs.values().find(|o| &o.name==output_str) {
                     state.focused_output_id = output.proxy.id();
+
+                    let cx = output.usable_area.x + (output.usable_area.w/2);
+                    let cy = output.usable_area.y + (output.usable_area.h/2);
+                    state.pointer_warp_requested = Some((cx, cy));
+
                     println!("needs_arrange from focus_output action");
-                    state.needs_arrange= true;
+                    state.needs_arrange_ids.push(state.focused_output_id.clone());
                 }
                 else {
                     println!("No output {output_str} was found");
@@ -236,7 +241,7 @@ impl Action {
                         println!("focused_column.geom.x = {} / window.geom.x = {}", focused_column.geom.x, window.geom.x);
                     }
                     println!("needs_arrange from move_to_output action");
-                    state.needs_arrange= true;
+                    state.needs_arrange_ids.push(state.focused_output_id.clone());
                 }
                 else {
                     println!("No output {output_str} was found");
@@ -251,7 +256,7 @@ impl Action {
                 focused_output.visible_tags = 1<<(tag-1);
 
                 println!("needs_arrange from focus_tag action"); 
-                state.needs_arrange = true;
+                state.needs_arrange_ids.push(state.focused_output_id.clone());
             }
             
             Action::ToggleTag(tag_str) => {
@@ -265,7 +270,7 @@ impl Action {
                 }
 
                 println!("needs_arrange from toggle_tag action");
-                state.needs_arrange= true;
+                state.needs_arrange_ids.push(state.focused_output_id.clone());
             }
 
             Action::MoveToTag(tag_str) => {
@@ -279,7 +284,7 @@ impl Action {
                 seat.hovered = None;
 
                 println!("needs_arrange from move_to_tag action"); 
-                state.needs_arrange = true;
+                state.needs_arrange_ids.push(state.focused_output_id.clone());
             }
             
             Action::CenterFocused => {
@@ -287,7 +292,7 @@ impl Action {
                     .find(|c| c.windows_id.contains(&focused_output.focused_window_id)).unwrap();
                 focused_column.center_requested = true;
                 println!("needs_arrange from center_focused action"); 
-                state.needs_arrange = true;
+                state.needs_arrange_ids.push(state.focused_output_id.clone());
             }
 
             Action::Focus(direction) => {
@@ -347,7 +352,7 @@ impl Action {
                 seat.ignore_pointer_enter_event = true;
 
                 println!("needs_arrange from focus action"); 
-                state.needs_arrange = true;
+                state.needs_arrange_ids.push(state.focused_output_id.clone());
             }
             
             Action::SwitchColumns(direction) => {
@@ -380,7 +385,7 @@ impl Action {
                     }
                 }
                 println!("needs_arrange from switch_columns action"); 
-                state.needs_arrange = true;
+                state.needs_arrange_ids.push(state.focused_output_id.clone());
             }
             
             Action::Move(direction) => {
@@ -490,7 +495,7 @@ impl Action {
                     }
                 }
                 println!("needs_arrange from move action"); 
-                state.needs_arrange = true;
+                state.needs_arrange_ids.push(state.focused_output_id.clone());
             }
 
             Action::Resize(direction) => {
@@ -579,7 +584,7 @@ impl Action {
                     }
                 }
                 println!("needs_arrange from resize action"); 
-                state.needs_arrange = true;
+                state.needs_arrange_ids.push(state.focused_output_id.clone());
             }
             
             Action::MoveFloating => {

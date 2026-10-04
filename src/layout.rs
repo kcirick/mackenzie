@@ -1,4 +1,3 @@
-
 use wayland_backend::client::ObjectId;
 use crate::protocol::river_wm::river_window_v1::Edges;
 use wayland_client::Proxy;
@@ -6,7 +5,7 @@ use wayland_client::Proxy;
 use std::collections::HashMap;
 
 use crate::wmcore::parse_hex_color;
-use crate::wmcore::WMState;
+//use crate::wmcore::WMState;
 use crate::wmcore::Window;
 use crate::wmcore::Direction;
 use crate::config::Config;
@@ -162,7 +161,8 @@ fn render_focused_column(
         let bcol = parse_hex_color(this_border_color.as_str());
         window.proxy.set_borders(Edges::all(), bw, bcol.0, bcol.1, bcol.2, bcol.3);
 
-        println!(" |---> focused column id = {} / window id = {} / window.geom = {}x{}+{}+{}", column.id, window.proxy.id(), window.geom.w, window.geom.h, window.geom.x, window.geom.y);
+        log::debug!(" |---> focused column id = {} / window id = {} / window.geom = {}x{}+{}+{}", 
+            column.id, window.proxy.id(), window.geom.w, window.geom.h, window.geom.x, window.geom.y);
         window.node.set_position(window.geom.x, window.geom.y);
     }
 }
@@ -245,117 +245,121 @@ fn render_unfocused_column(
         window.proxy.set_borders(Edges::all(), bw, bcol.0, bcol.1, bcol.2, bcol.3 );
         
         if direction == Direction::Right {
-            println!(" |---> right column id = {} / window id = {} / window at scroll edge = {} / window dimension: {}x{}+{}+{}", column.id, window.proxy.id(), window.at_scroll_edge, window.geom.w, window.geom.h, window.geom.x, window.geom.y);
+            log::debug!(" |---> right column id = {} / window id = {} / window dimension: {}x{}+{}+{}", 
+                column.id, window.proxy.id(), window.geom.w, window.geom.h, window.geom.x, window.geom.y);
         } else {
-            println!(" |---> left column id = {} / window id = {} / window at scroll edge = {} / window dimension: {}x{}+{}+{}", column.id, window.proxy.id(), window.at_scroll_edge, window.geom.w, window.geom.h, window.geom.x, window.geom.y);
+            log::debug!(" |---> left column id = {} / window id = {} / window dimension: {}x{}+{}+{}",
+                column.id, window.proxy.id(), window.geom.w, window.geom.h, window.geom.x, window.geom.y);
         }
         window.node.set_position(window.geom.x, window.geom.y);
     }
 }
 
-pub fn arrange(
-    state: &mut WMState
+pub fn arrange_output(
+    output: &Output,
+    focused_output_id: &ObjectId,
+    columns: &mut Vec<Column>,
+    windows: &mut HashMap<ObjectId, Window>,
+    config: &Config, 
 ) {
-    println!(" |-> [ arrange ]");
-    for (output_id, output) in state.outputs.iter() {
-        println!(" |--> output = {}", output_id);
+    let output_id = output.proxy.id();
+    log::debug!("[ arrange ] output = {}", output_id);
 
-        // Hide windows not in the visible tags
-        for column in state.columns.iter()
-            .filter(|c| &c.output_id == output_id && c.tag & output.visible_tags == 0) {
-                for window in state.windows.values().filter(|w| w.column_id==column.id) {
-                    window.proxy.hide();
-                }
-            }
-
-        // List of columns in the output in the visible tags
-        let mut visible_columns: Vec<&mut Column> = state.columns.iter_mut()
-            .filter(|c| &c.output_id == output_id && c.tag & output.visible_tags > 0)
-            .collect();
-
-        let ncols_visible = visible_columns.len();
-        println!("ncols_visible = {ncols_visible}");
-        if ncols_visible == 0 { continue; }
-
-        let focused_window = match state.windows.get(&output.focused_window_id) {
-            Some(window) => window.clone(),
-            None => state.windows.values().find(|w| w.column_id == visible_columns[0].id).unwrap().clone(),
-        };
-        
-        // Don't need to do anything if focused window is fullscreen mode
-        if focused_window.is_fullscreen { continue; }
-
-        let focused_column_index = match visible_columns.iter().position(|c| c.id == focused_window.column_id) {
-            Some(index) => index,
-            None => visible_columns.len()-1, 
-        };
-        println!(" |---> focused window id = {} / column index = {focused_column_index} / id = {}", focused_window.proxy.id(), focused_window.column_id);
-
-        let bw = state.config.window.border_width;
-        let gap = state.config.layout.gap;
-        let area = output.usable_area;
-
-        // Compute the x_offset first
-        let mut x_offset = area.x;
-        if let Some(previous_column) = visible_columns.get(focused_column_index-1) {
-            if previous_column.geom.w>0 {
-                x_offset = previous_column.geom.x + previous_column.geom.w + gap + 2*bw;
-            } else {
-                x_offset = previous_column.geom.x;
+    // Hide windows not in the visible tags
+    for column in columns.iter()
+        .filter(|c| c.output_id == output_id && c.tag & output.visible_tags == 0) {
+            for window in windows.values().filter(|w| w.column_id==column.id) {
+                window.proxy.hide();
             }
         }
 
-        //--- Render the focused column first
-        let focused_column = visible_columns.get_mut(focused_column_index).unwrap();
-        render_focused_column(
-            focused_column, 
-            &mut state.windows, 
-            &focused_window,
+    // List of columns in the output in the visible tags
+    let mut visible_columns: Vec<&mut Column> = columns.iter_mut()
+        .filter(|c| c.output_id == output_id && c.tag & output.visible_tags > 0)
+        .collect();
+
+    let ncols_visible = visible_columns.len();
+    log::debug!("ncols_visible = {ncols_visible}");
+    if ncols_visible == 0 { return; }
+
+    let focused_window = match windows.get(&output.focused_window_id) {
+        Some(window) => window.clone(),
+        None => windows.values().find(|w| w.column_id == visible_columns[0].id).unwrap().clone(),
+    };
+
+    // Don't need to do anything if focused window is fullscreen mode
+    if focused_window.is_fullscreen { return; }
+
+    let focused_column_index = match visible_columns.iter().position(|c| c.id == focused_window.column_id) {
+        Some(index) => index,
+        None => visible_columns.len()-1, 
+    };
+    //println!(" |---> focused window id = {} / column index = {focused_column_index} / id = {}", focused_window.proxy.id(), focused_window.column_id);
+
+    let bw = config.window.border_width;
+    let gap = config.layout.gap;
+    let area = output.usable_area;
+
+    // Compute the x_offset first
+    let mut x_offset = area.x;
+    if let Some(previous_column) = visible_columns.get(focused_column_index-1) {
+        if previous_column.geom.w>0 {
+            x_offset = previous_column.geom.x + previous_column.geom.w + gap + 2*bw;
+        } else {
+            x_offset = previous_column.geom.x;
+        }
+    }
+
+    //--- Render the focused column first
+    let focused_column = visible_columns.get_mut(focused_column_index).unwrap();
+    render_focused_column(
+        focused_column, 
+        windows, 
+        &focused_window,
+        x_offset,
+        area,
+        &config,
+        &focused_column.output_id==focused_output_id,
+    );
+
+    //--- Iterate from the focused window to the end of the vector 
+    let focused_column = visible_columns.get(focused_column_index).unwrap();
+    if focused_column.geom.w==0 {
+        x_offset = focused_column.geom.x;
+    } else {
+        x_offset = focused_column.geom.x + focused_column.geom.w + gap + 2*bw;
+    }
+    for i in (focused_column_index+1)..ncols_visible {
+        let column = visible_columns.get_mut(i).unwrap();
+        render_unfocused_column(
+            Direction::Right,
+            column, 
+            windows, 
             x_offset,
             area,
-            &state.config,
-            focused_column.output_id==state.focused_output_id,
+            &config,
         );
-
-        //--- Iterate from the focused window to the end of the vector 
-        let focused_column = visible_columns.get(focused_column_index).unwrap();
-        if focused_column.geom.w==0 {
-            x_offset = focused_column.geom.x;
-        } else {
-            x_offset = focused_column.geom.x + focused_column.geom.w + gap + 2*bw;
+        if column.geom.w > 0 { 
+            x_offset += column.geom.w + gap + 2*bw;
         }
-        for i in (focused_column_index+1)..ncols_visible {
-            let column = visible_columns.get_mut(i).unwrap();
-            render_unfocused_column(
-                Direction::Right,
-                column, 
-                &mut state.windows, 
-                x_offset,
-                area,
-                &state.config,
-            );
-            if column.geom.w > 0 { 
-                x_offset += column.geom.w + gap + 2*bw;
-            }
-        }
+    }
 
-        //--- Iterate from the focused window to the beginning of the vector backwards 
-        let focused_column = visible_columns.get(focused_column_index).unwrap();
-        x_offset = focused_column.geom.x;
-        for i in (0..focused_column_index).rev() {
-            let column = visible_columns.get_mut(i).unwrap();
-            x_offset -= column.geom.w + gap + 2*bw;
-            render_unfocused_column(
-                Direction::Left,
-                column, 
-                &mut state.windows, 
-                x_offset,
-                area,
-                &state.config,
-            );
-            if column.geom.w == 0 {
-                x_offset += gap + 2*bw
-            }
+    //--- Iterate from the focused window to the beginning of the vector backwards 
+    let focused_column = visible_columns.get(focused_column_index).unwrap();
+    x_offset = focused_column.geom.x;
+    for i in (0..focused_column_index).rev() {
+        let column = visible_columns.get_mut(i).unwrap();
+        x_offset -= column.geom.w + gap + 2*bw;
+        render_unfocused_column(
+            Direction::Left,
+            column, 
+            windows, 
+            x_offset,
+            area,
+            &config,
+        );
+        if column.geom.w == 0 {
+            x_offset += gap + 2*bw
         }
     }
 }

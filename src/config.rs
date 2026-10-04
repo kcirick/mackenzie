@@ -39,7 +39,10 @@ pub struct WindowConfig {
 pub struct InputsConfig {
     pub xkb_layout: String,
     pub xkb_options: String,
+    pub kb_repeat_rate: i32,
+    pub kb_repeat_delay: i32,
     pub touchpad_tap_click: bool,
+    pub touchpad_natural_scroll: bool,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -99,7 +102,10 @@ impl Default for InputsConfig {
         Self {
             xkb_layout: "us".to_string(),
             xkb_options: "".to_string(),
+            kb_repeat_rate: 30,
+            kb_repeat_delay: 250,
             touchpad_tap_click: false,
+            touchpad_natural_scroll: false,
         }
     }
 }
@@ -127,7 +133,7 @@ impl Config {
 
             return config;
         } else {
-            eprintln!("Couldn't read config file: {:?}", config_file);
+            log::error!("Couldn't read config file: {:?}", config_file);
         }
 
         // Returns default config

@@ -153,7 +153,7 @@ impl Seat {
                 self.xkb_bindings.insert(binding.proxy.id(), binding);
             }
         } else {
-            println!(" ---> No keybinds found. Defaulting to minimal set");
+            log::warn!(" ---> No keybinds found. Defaulting to minimal set");
             let default_binds = load_default_keybinds();
             for bind in default_binds {
                 let keysym = xkb::keysym_from_name(bind.key.as_str(), xkb::KEYSYM_NO_FLAGS);
@@ -272,12 +272,12 @@ impl Dispatch<RiverSeatV1, ()> for WMState {
                 if seat.ignore_pointer_enter_event {
                     seat.ignore_pointer_enter_event = false;
                 } else {
-                    println!("-----> [ PointerEnter event ]");
+                    log::debug!("---> PointerEnter event");
                     seat.hovered = Some(window);
                 }
             }
             Event::PointerLeave => {
-                    println!("-----> [ PointerLeave event ]");
+                    //log::debug!("---> PointerLeave event");
                     seat.hovered = None;
             }
             Event::WindowInteraction { window } => seat.interacted = Some(window),
@@ -286,14 +286,18 @@ impl Dispatch<RiverSeatV1, ()> for WMState {
             Event::OpRelease => seat.op_release = true,
             Event::PointerPosition { x, y } => { 
                 (seat.cursor_x, seat.cursor_y) = (x, y);
-                for(oid, output) in &mut state.outputs {
+                log::debug!("x = {x} / y = {y}");
+                for (oid, output) in state.outputs.iter() {
                     let geom = output.full_area;
                     if x >= geom.x && x < geom.x+geom.w && y >= geom.y && y < geom.y+geom.h && &state.focused_output_id != oid {
-                        println!(" -> PointerPosition: focused output = {}", oid);
+                        log::debug!("---> PointerPosition: focused output = {}", oid);
+                        if state.focused_output_id!=ObjectId::null() {
+                            state.needs_arrange_ids.push(state.focused_output_id.clone());
+                        }
+                        state.needs_arrange_ids.push(oid.clone());
                         state.focused_output_id = oid.clone();
                         if let Some(window) = state.windows.get(&output.focused_window_id) {
                             seat.proxy.focus_window(&window.proxy);
-                            state.needs_arrange=true;
                         }
                         if let Some(ls_output) = &output.ls_output {
                             ls_output.set_default();
@@ -348,26 +352,11 @@ impl Dispatch<RiverLayerShellSeatV1, ()> for WMState {
     fn event(
         _state: &mut Self,
         _proxy: &RiverLayerShellSeatV1,
-        event: <RiverLayerShellSeatV1 as Proxy>::Event,
+        _event: <RiverLayerShellSeatV1 as Proxy>::Event,
         _data: &(),
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
     ){
-        use crate::protocol::river_wm::river_layer_shell_seat_v1::Event;
-        match event {
-            Event::FocusExclusive => {
-                println!("RLS-SeatV1::FocusExclusive");
-                
-            }
-            Event::FocusNonExclusive => {
-                println!("RLS-SeatV1::FocusNonExclusive");
-
-            }
-            Event::FocusNone => {
-                println!("RLS-SeatV1::FocusNone");
-
-            }
-        }
     }
 }
 
@@ -380,16 +369,6 @@ impl Dispatch<RiverInputManagerV1, ()> for WMState {
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
     ) {
-        // input_manager events 
-        //use crate::protocol::river_wm::river_input_manager_v1::Event;
-        //match event {
-        //    Event::InputDevice {id: _} => {
-        //        println!("new input device");
-        //    }
-        //    Event::Finished => {
-        //        println!("input_manager finished");
-        //    }
-        //}
     }
 
     wayland_client::event_created_child!(
@@ -421,6 +400,11 @@ impl Dispatch<RiverInputDeviceV1, ()> for WMState {
             }
             Event::Type { _type } => {
                 device_info.device_type = _type.into_result().ok();
+                if device_info.device_type == Some(DeviceType::Keyboard) {
+                    let rate = state.config.inputs.kb_repeat_rate;
+                    let delay = state.config.inputs.kb_repeat_delay;
+                    proxy.set_repeat_info(rate, delay);
+                }
             }
             _ => { }
         }
@@ -460,12 +444,11 @@ impl Dispatch<RiverLibinputDeviceV1, ()> for WMState {
             Event::InputDevice{ device } => {
                 let device_info = state.riverinput_devices.get_mut(&device).expect("no device_info found");
                 device_info.libinput_device = Some(proxy.clone());
-                //println!("HERE Device name = {}", device_info.name);
             }
             Event::TapSupport { finger_count } => {
                 if finger_count > 0 {
                     if let Some(device_info) = state.riverinput_devices.values().find(|d| d.libinput_device==Some(proxy.clone())) {
-                        println!("Tap-to-click is supported on device {}", device_info.name);
+                        log::info!("Tap-to-click is supported on device {}", device_info.name);
 
                         let enable_tap = if state.config.inputs.touchpad_tap_click {
                             crate::protocol::river_wm::river_libinput_device_v1::TapState::Enabled
@@ -474,6 +457,21 @@ impl Dispatch<RiverLibinputDeviceV1, ()> for WMState {
                         };
 
                         proxy.set_tap(enable_tap, qh, ());
+                    }
+                }
+            }
+            Event::NaturalScrollSupport { supported } => {
+                if supported > 0 {
+                    if let Some(device_info) = state.riverinput_devices.values().find(|d| d.libinput_device==Some(proxy.clone())) {
+                        log::info!("Natural scroll is supported on device {}", device_info.name);
+                
+                        let natural_scroll = if state.config.inputs.touchpad_natural_scroll {
+                            crate::protocol::river_wm::river_libinput_device_v1::NaturalScrollState::Enabled
+                        } else {
+                            crate::protocol::river_wm::river_libinput_device_v1::NaturalScrollState::Disabled
+                        };
+
+                        proxy.set_natural_scroll(natural_scroll, qh, ());
                     }
                 }
             }
@@ -577,13 +575,12 @@ impl Dispatch<RiverXkbKeymapV1, ()> for WMState {
         use crate::protocol::river_wm::river_xkb_keymap_v1::Event;
         match event {
             Event::Success => {
-                //println!("Success: setting keymap");
                 for kb in &state.keyboards {
                     kb.set_keymap(proxy);
                 }
             }
             Event::Failure {error_msg } => {
-                println!("Could not set keymap: {error_msg}");
+                log::error!("Could not set keymap: {error_msg}");
             }
             //_ => { }
         }
