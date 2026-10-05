@@ -29,7 +29,9 @@ A simple scrolling window manager/compositor for [River](https://codeberg.org/ri
 
 ### Screenshots
 
-Will be added soon!
+v0.1.0
+
+![Screenshopt v0.1.0](./examples/MackenzieSS-20261005-1.png)
 
 
 ## Building

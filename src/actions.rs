@@ -462,7 +462,7 @@ impl Action {
                             focused_window,
                             &state.config,
                         );
-                        state.columns.insert(focused_column_index, new_column.clone());
+                        state.columns.insert(focused_column_index+1, new_column.clone());
 
                         let prev_column = state.columns.iter_mut().find(|c| c.id == focused_column_id).unwrap();
                         prev_column.windows_id.retain(|wid| wid != &focused_output.focused_window_id);

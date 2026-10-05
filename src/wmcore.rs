@@ -236,8 +236,9 @@ impl WMState {
 
         // Arrange should be here
         for oid in self.needs_arrange_ids.iter() {
-            let output = self.outputs.get_mut(&oid).unwrap();
-            arrange_output(output, &self.focused_output_id, &mut self.columns, &mut self.windows, &self.config);
+            if let Some(output) = self.outputs.get_mut(&oid) {
+                arrange_output(output, &self.focused_output_id, &mut self.columns, &mut self.windows, &self.config);
+            }
         }
         self.needs_arrange_ids.clear();
         assert!(self.needs_arrange_ids.is_empty());

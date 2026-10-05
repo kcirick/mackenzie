@@ -214,9 +214,9 @@ fn render_unfocused_column(
                 if window.geom.x + window.geom.w > output_area.x + output_area.w {
                     let clip_width = (output_area.x+output_area.w)-window.geom.x;
                     window.proxy.set_clip_box(-bw, -bw, clip_width+bw, window.geom.h+2*bw);
-                    if output_area.x+output_area.w - window.geom.x < ((config.layout.scroll_edge_gap as f32*1.5) as i32) {
-                        window.at_scroll_edge = true;
-                    }
+                    //if output_area.x+output_area.w - window.geom.x < ((config.layout.scroll_edge_gap as f32*1.5) as i32) {
+                    window.at_scroll_edge = true;
+                    //}
                 } else {
                     window.proxy.set_clip_box(0, 0, 0, 0);
                 }
@@ -230,9 +230,9 @@ fn render_unfocused_column(
                     let clip_x = output_area.x-window.geom.x;
                     let clip_width = window.geom.x+window.geom.w - output_area.x;
                     window.proxy.set_clip_box(clip_x, -bw, clip_width+bw, window.geom.h+2*bw);
-                    if window.geom.x + window.geom.w - output_area.x < ((config.layout.scroll_edge_gap as f32*1.5) as i32) {
-                        window.at_scroll_edge = true;
-                    }
+                    //if window.geom.x + window.geom.w - output_area.x < ((config.layout.scroll_edge_gap as f32*1.5) as i32) {
+                    window.at_scroll_edge = true;
+                    //}
                 } else {
                     window.proxy.set_clip_box(0, 0, 0, 0);
                 }
