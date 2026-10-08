@@ -142,8 +142,11 @@ It is divided into 5 sections:
 Please use the [Github Issues Tracker][ghit] to report bugs and issues.
 
 
-  - 0.1 (work in progress)
+  - 0.2 (work in progress)
+    - Goal: Streamline the code and focus on efficiency 
+  - 0.1.0 (2026-10-05) ([download][v01])
     - Goal: get the base code in working order
 
 
+[v01]: https://github.com/kcirick/mackenzie/archive/refs/tags/v0.1.0.tar.gz
 [ghit]: https://github.com/kcirick/mackenzie/issues
